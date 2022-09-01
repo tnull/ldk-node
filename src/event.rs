@@ -1,13 +1,9 @@
 use crate::{
-	hex_utils, ChannelManager, Error, LdkLiteChainAccess, LdkLiteConfig,
-	NetworkGraph, PaymentInfo, PaymentInfoStorage, PaymentStatus,
+	hex_utils, ChannelManager, Config, Error, NetworkGraph, PaymentInfo, PaymentInfoStorage,
+	PaymentStatus, Wallet,
 };
 
-#[allow(unused_imports)]
-use crate::logger::{
-	log_error, log_given_level, log_info, log_internal, log_trace, log_warn, 
-	Logger,
-};
+use crate::logger::{log_error, log_given_level, log_info, log_internal, Logger};
 
 use lightning::chain::chaininterface::{BroadcasterInterface, ConfirmationTarget, FeeEstimator};
 use lightning::chain::keysinterface::KeysManager;
@@ -57,14 +53,14 @@ pub enum Event {
 		/// The channel_id of the channel which is ready.
 		channel_id: [u8; 32],
 		/// The user_channel_id of the channel which is ready.
-		user_channel_id: u64,
+		user_channel_id: u128,
 	},
 	/// A channel has been closed.
 	ChannelClosed {
 		/// The channel_id of the channel which has been closed.
 		channel_id: [u8; 32],
 		/// The user_channel_id of the channel which has been closed.
-		user_channel_id: u64,
+		user_channel_id: u128,
 	},
 	// TODO: Implement on-chain events when better integrating with BDK wallet sync.
 	//OnChainPaymentSent {
@@ -74,7 +70,7 @@ pub enum Event {
 }
 
 // TODO: Figure out serialization more concretely - see issue #30
-impl Readable for LdkLiteEvent {
+impl Readable for Event {
 	fn read<R: lightning::io::Read>(
 		reader: &mut R,
 	) -> Result<Self, lightning::ln::msgs::DecodeError> {
@@ -94,12 +90,12 @@ impl Readable for LdkLiteEvent {
 			}
 			3u8 => {
 				let channel_id: [u8; 32] = Readable::read(reader)?;
-				let user_channel_id: u64 = Readable::read(reader)?;
+				let user_channel_id: u128 = Readable::read(reader)?;
 				Ok(Self::ChannelReady { channel_id, user_channel_id })
 			}
 			4u8 => {
 				let channel_id: [u8; 32] = Readable::read(reader)?;
-				let user_channel_id: u64 = Readable::read(reader)?;
+				let user_channel_id: u128 = Readable::read(reader)?;
 				Ok(Self::ChannelClosed { channel_id, user_channel_id })
 			}
 			//5u8 => {
@@ -113,7 +109,7 @@ impl Readable for LdkLiteEvent {
 	}
 }
 
-impl Writeable for LdkLiteEvent {
+impl Writeable for Event {
 	fn write<W: Writer>(&self, writer: &mut W) -> Result<(), lightning::io::Error> {
 		match self {
 			Self::PaymentSuccessful { payment_hash } => {
@@ -153,7 +149,7 @@ impl Writeable for LdkLiteEvent {
 	}
 }
 
-pub(crate) struct LdkLiteEventQueue<K: Deref>
+pub(crate) struct EventQueue<K: Deref>
 where
 	K::Target: KVStorePersister,
 {
@@ -162,7 +158,7 @@ where
 	persister: K,
 }
 
-impl<K: Deref> LdkLiteEventQueue<K>
+impl<K: Deref> EventQueue<K>
 where
 	K::Target: KVStorePersister,
 {
@@ -171,7 +167,8 @@ where
 		let notifier = Condvar::new();
 		Self { queue, notifier, persister }
 	}
-	pub(crate) fn add_event(&self, event: LdkLiteEvent) -> Result<(), Error> {
+
+	pub(crate) fn add_event(&self, event: Event) -> Result<(), Error> {
 		{
 			let mut locked_queue = self.queue.lock().unwrap();
 			locked_queue.push_back(Arc::new(event));
@@ -182,11 +179,9 @@ where
 		Ok(())
 	}
 
-	pub(crate) fn next_event(&self) -> Arc<LdkLiteEvent> {
-		let locked_queue = self
-			.notifier
-			.wait_while(self.queue.lock().unwrap(), |queue| queue.is_empty())
-			.unwrap();
+	pub(crate) fn next_event(&self) -> Arc<Event> {
+		let locked_queue =
+			self.notifier.wait_while(self.queue.lock().unwrap(), |queue| queue.is_empty()).unwrap();
 		Arc::clone(&locked_queue.front().unwrap())
 	}
 
@@ -208,7 +203,7 @@ where
 	}
 }
 
-impl<K: Deref> ReadableArgs<K> for LdkLiteEventQueue<K>
+impl<K: Deref> ReadableArgs<K> for EventQueue<K>
 where
 	K::Target: KVStorePersister,
 {
@@ -223,7 +218,7 @@ where
 	}
 }
 
-struct EventQueueDeserWrapper(VecDeque<Arc<LdkLiteEvent>>);
+struct EventQueueDeserWrapper(VecDeque<Arc<Event>>);
 
 impl Readable for EventQueueDeserWrapper {
 	fn read<R: lightning::io::Read>(
@@ -250,12 +245,12 @@ impl Writeable for EventQueueSerWrapper<'_> {
 	}
 }
 
-pub(crate) struct LdkLiteEventHandler<K: Deref, L: Deref>
+pub(crate) struct EventHandler<K: Deref, L: Deref>
 where
 	K::Target: KVStorePersister,
 	L::Target: Logger,
 {
-	chain_access: Arc<ChainAccess<bdk::sled::Tree>>,
+	wallet: Arc<Wallet<bdk::sled::Tree>>,
 	event_queue: Arc<EventQueue<K>>,
 	channel_manager: Arc<ChannelManager>,
 	network_graph: Arc<NetworkGraph>,
@@ -266,20 +261,20 @@ where
 	_config: Arc<Config>,
 }
 
-impl<K: Deref, L: Deref> LdkLiteEventHandler<K, L>
+impl<K: Deref, L: Deref> EventHandler<K, L>
 where
 	K::Target: KVStorePersister,
 	L::Target: Logger,
 {
 	pub fn new(
-		chain_access: Arc<ChainAccess<bdk::sled::Tree>>, event_queue: Arc<EventQueue<K>>,
+		wallet: Arc<Wallet<bdk::sled::Tree>>, event_queue: Arc<EventQueue<K>>,
 		channel_manager: Arc<ChannelManager>, network_graph: Arc<NetworkGraph>,
 		keys_manager: Arc<KeysManager>, inbound_payments: Arc<PaymentInfoStorage>,
 		outbound_payments: Arc<PaymentInfoStorage>, logger: L, _config: Arc<Config>,
 	) -> Self {
 		Self {
 			event_queue,
-			chain_access,
+			wallet,
 			channel_manager,
 			network_graph,
 			keys_manager,
@@ -291,7 +286,7 @@ where
 	}
 }
 
-impl<K: Deref, L: Deref> LdkEventHandler for LdkLiteEventHandler<K, L>
+impl<K: Deref, L: Deref> LdkEventHandler for EventHandler<K, L>
 where
 	K::Target: KVStorePersister,
 	L::Target: Logger,
@@ -310,9 +305,9 @@ where
 				let confirmation_target = ConfirmationTarget::Normal;
 
 				// Sign the final funding transaction and broadcast it.
-				match self.chain_access.create_funding_transaction(
+				match self.wallet.create_funding_transaction(
 					&output_script,
-					*channel_value_satoshis,
+					channel_value_satoshis,
 					confirmation_target,
 				) {
 					Ok(final_tx) => {
@@ -321,7 +316,7 @@ where
 							.channel_manager
 							.funding_transaction_generated(
 								&temporary_channel_id,
-								counterparty_node_id,
+								&counterparty_node_id,
 								final_tx,
 							)
 							.is_err()
@@ -331,7 +326,14 @@ where
 					}
 					Err(err) => {
 						log_error!(self.logger, "Failed to create funding transaction: {}", err);
-						self.channel_manager.force_close_without_broadcasting_txn(temporary_channel_id, counterparty_node_id).expect("Failed to force close channel after funding generation failed");
+						self.channel_manager
+							.force_close_without_broadcasting_txn(
+								&temporary_channel_id,
+								&counterparty_node_id,
+							)
+							.expect(
+								"Failed to force close channel after funding generation failed",
+							);
 					}
 				}
 			}
@@ -345,30 +347,27 @@ where
 				let payment_preimage = match purpose {
 					PaymentPurpose::InvoicePayment { payment_preimage, payment_secret } => {
 						if payment_preimage.is_some() {
-							*payment_preimage
+							payment_preimage
 						} else {
 							self.channel_manager
-								.get_payment_preimage(*payment_hash, *payment_secret)
+								.get_payment_preimage(payment_hash, payment_secret)
 								.ok()
 						}
 					}
-					PaymentPurpose::SpontaneousPayment(preimage) => (Some(*preimage), None),
+					PaymentPurpose::SpontaneousPayment(preimage) => Some(preimage),
 				};
 
 				if let Some(preimage) = payment_preimage {
 					self.channel_manager.claim_funds(preimage);
 					self.event_queue
-						.add_event(LdkLiteEvent::PaymentReceived {
-							payment_hash: *payment_hash,
-							amount_msat: *amount_msat,
-						})
+						.add_event(Event::PaymentReceived { payment_hash, amount_msat })
 						.expect("Failed to push to event queue");
 				} else {
 					log_error!(
 						self.logger,
 						"Failed to claim payment with hash {}: preimage unknown.",
 						hex_utils::to_string(&payment_hash.0),
-						);
+					);
 				}
 			}
 			LdkEvent::PaymentClaimed { payment_hash, purpose, amount_msat } => {
@@ -379,17 +378,13 @@ where
 					amount_msat,
 				);
 				let (payment_preimage, payment_secret) = match purpose {
-					PaymentPurpose::InvoicePayment {
-						payment_preimage,
-						payment_secret,
-						..
-					} => (*payment_preimage, Some(*payment_secret)),
-					PaymentPurpose::SpontaneousPayment(preimage) => {
-						(Some(*preimage), None)
+					PaymentPurpose::InvoicePayment { payment_preimage, payment_secret, .. } => {
+						(payment_preimage, Some(payment_secret))
 					}
+					PaymentPurpose::SpontaneousPayment(preimage) => (Some(preimage), None),
 				};
 				let mut payments = self.inbound_payments.lock().unwrap();
-				match payments.entry(*payment_hash) {
+				match payments.entry(payment_hash) {
 					hash_map::Entry::Occupied(mut e) => {
 						let payment = e.get_mut();
 						payment.status = PaymentStatus::Succeeded;
@@ -401,27 +396,19 @@ where
 							preimage: payment_preimage,
 							secret: payment_secret,
 							status: PaymentStatus::Succeeded,
-							amount_msat: Some(*amount_msat),
+							amount_msat: Some(amount_msat),
 						});
 					}
 				}
 				self.event_queue
-					.add_event(Event::PaymentReceived {
-						payment_hash: *payment_hash,
-						amount_msat: *amount_msat,
-					})
+					.add_event(Event::PaymentReceived { payment_hash, amount_msat })
 					.expect("Failed to push to event queue");
 			}
-			LdkEvent::PaymentSent {
-				payment_preimage,
-				payment_hash,
-				fee_paid_msat,
-				..
-			} => {
+			LdkEvent::PaymentSent { payment_preimage, payment_hash, fee_paid_msat, .. } => {
 				let mut payments = self.outbound_payments.lock().unwrap();
 				for (hash, payment) in payments.iter_mut() {
-					if *hash == *payment_hash {
-						payment.preimage = Some(*payment_preimage);
+					if *hash == payment_hash {
+						payment.preimage = Some(payment_preimage);
 						payment.status = PaymentStatus::Succeeded;
 						log_info!(
 							self.logger,
@@ -439,7 +426,7 @@ where
 					}
 				}
 				self.event_queue
-					.add_event(Event::PaymentSuccessful { payment_hash: *payment_hash })
+					.add_event(Event::PaymentSuccessful { payment_hash })
 					.expect("Failed to push to event queue");
 			}
 			LdkEvent::PaymentFailed { payment_hash, .. } => {
@@ -456,7 +443,7 @@ where
 					payment.status = PaymentStatus::Failed;
 				}
 				self.event_queue
-					.add_event(Event::PaymentFailed { payment_hash: *payment_hash })
+					.add_event(Event::PaymentFailed { payment_hash })
 					.expect("Failed to push to event queue");
 			}
 
@@ -479,10 +466,10 @@ where
 			}
 			LdkEvent::SpendableOutputs { outputs } => {
 				// TODO: We should eventually remember the outputs and supply them to the wallet's coin selection, once BDK allows us to do so.
-				let destination_address = self.chain_access.get_new_address().unwrap();
+				let destination_address = self.wallet.get_new_address().unwrap();
 				let output_descriptors = &outputs.iter().map(|a| a).collect::<Vec<_>>();
 				let tx_feerate =
-					self.chain_access.get_est_sat_per_1000_weight(ConfirmationTarget::Normal);
+					self.wallet.get_est_sat_per_1000_weight(ConfirmationTarget::Normal);
 				let spending_tx = self
 					.keys_manager
 					.spend_spendable_outputs(
@@ -493,7 +480,7 @@ where
 						&Secp256k1::new(),
 					)
 					.unwrap();
-				self.chain_access.broadcast_transaction(&spending_tx);
+				self.wallet.broadcast_transaction(&spending_tx);
 			}
 			LdkEvent::OpenChannelRequest { .. } => {}
 			LdkEvent::PaymentForwarded {
@@ -531,12 +518,15 @@ where
 						})
 						.unwrap_or_default()
 				};
-				let from_prev_str =
-					format!(" from {}{}", node_str(prev_channel_id), channel_str(prev_channel_id));
+				let from_prev_str = format!(
+					" from {}{}",
+					node_str(&prev_channel_id),
+					channel_str(&prev_channel_id)
+				);
 				let to_next_str =
-					format!(" to {}{}", node_str(next_channel_id), channel_str(next_channel_id));
+					format!(" to {}{}", node_str(&next_channel_id), channel_str(&next_channel_id));
 
-				let from_onchain_str = if *claim_from_onchain_tx {
+				let from_onchain_str = if claim_from_onchain_tx {
 					"from onchain downstream claim"
 				} else {
 					"from HTLC fulfill message"
@@ -566,28 +556,22 @@ where
 				log_info!(
 					self.logger,
 					"Channel {} with {} ready to be used.",
-					hex_utils::to_string(channel_id),
+					hex_utils::to_string(&channel_id),
 					counterparty_node_id,
 				);
 				self.event_queue
-					.add_event(LdkLiteEvent::ChannelReady {
-						channel_id: *channel_id,
-						user_channel_id: *user_channel_id,
-					})
+					.add_event(Event::ChannelReady { channel_id, user_channel_id })
 					.expect("Failed to push to event queue");
 			}
 			LdkEvent::ChannelClosed { channel_id, reason, user_channel_id } => {
 				log_info!(
 					self.logger,
 					"Channel {} closed due to: {:?}",
-					hex_utils::to_string(channel_id),
+					hex_utils::to_string(&channel_id),
 					reason
 				);
 				self.event_queue
-					.add_event(LdkLiteEvent::ChannelClosed {
-						channel_id: *channel_id,
-						user_channel_id: *user_channel_id,
-					})
+					.add_event(Event::ChannelClosed { channel_id, user_channel_id })
 					.expect("Failed to push to event queue");
 			}
 			LdkEvent::DiscardFunding { .. } => {}
