@@ -332,7 +332,8 @@ where
 							}
 						}
 					}
-					Err(_err) => {
+					Err(err) => {
+						log_error!(self.logger, "Failed to create funding transaction: {}", err);
 						self.channel_manager
 							.force_close_without_broadcasting_txn(
 								&temporary_channel_id,
