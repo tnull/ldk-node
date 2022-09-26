@@ -3,12 +3,15 @@ use crate::{Config, FilesystemLogger, NetworkGraph, Scorer, WALLET_KEYS_SEED_LEN
 
 use lightning::routing::scoring::{ProbabilisticScorer, ProbabilisticScoringParameters};
 use lightning::util::ser::{Readable, ReadableArgs};
+use lightning_persister::FilesystemPersister;
 
 use rand::{thread_rng, RngCore};
 
 use std::fs;
 use std::io::{BufReader, Write};
+use std::os::unix::io::AsRawFd;
 use std::path::Path;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 pub(crate) fn read_or_generate_seed_file(keys_seed_path: &str) -> [u8; WALLET_KEYS_SEED_LEN] {
@@ -82,4 +85,38 @@ pub(crate) fn read_payment_info(config: &Config) -> Vec<PaymentInfo> {
 	}
 
 	payments
+}
+
+/// Provides an interface that allows a previously persisted key to be unpersisted.
+pub trait KVStoreUnpersister {
+	/// Unpersist (i.e., remove) the writeable previously persisted under the provided key.
+	/// Returns `true` if the key was present, and `false` otherwise.
+	fn unpersist(&self, key: &str) -> std::io::Result<bool>;
+}
+
+impl KVStoreUnpersister for FilesystemPersister {
+	fn unpersist(&self, key: &str) -> std::io::Result<bool> {
+		let mut dest_file = PathBuf::from(self.get_data_dir());
+		dest_file.push(key);
+
+		if !dest_file.is_file() {
+			return Ok(false);
+		}
+
+		fs::remove_file(&dest_file)?;
+		let parent_directory = dest_file.parent().unwrap();
+		let dir_file = fs::OpenOptions::new().read(true).open(parent_directory)?;
+		#[cfg(not(target_os = "windows"))]
+		{
+			unsafe {
+				libc::fsync(dir_file.as_raw_fd());
+			}
+		}
+
+		if dest_file.is_file() {
+			return Err(std::io::Error::new(std::io::ErrorKind::Other, "Unpersisting key failed"));
+		}
+
+		return Ok(true);
+	}
 }

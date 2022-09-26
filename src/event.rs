@@ -3,6 +3,7 @@ use crate::{
 	PaymentInfo, PaymentInfoStorage, PaymentStatus, Wallet,
 };
 
+use crate::io_utils::KVStoreUnpersister;
 use crate::logger::{log_error, log_info, Logger};
 
 use lightning::chain::chaininterface::{BroadcasterInterface, ConfirmationTarget, FeeEstimator};
@@ -183,7 +184,7 @@ impl Writeable for EventQueueSerWrapper<'_> {
 
 pub(crate) struct EventHandler<K: Deref, L: Deref>
 where
-	K::Target: KVStorePersister,
+	K::Target: KVStorePersister + KVStoreUnpersister,
 	L::Target: Logger,
 {
 	wallet: Arc<Wallet<bdk::database::SqliteDatabase>>,
@@ -199,7 +200,7 @@ where
 
 impl<K: Deref, L: Deref> EventHandler<K, L>
 where
-	K::Target: KVStorePersister,
+	K::Target: KVStorePersister + KVStoreUnpersister,
 	L::Target: Logger,
 {
 	pub fn new(
@@ -224,7 +225,7 @@ where
 
 impl<K: Deref, L: Deref> LdkEventHandler for EventHandler<K, L>
 where
-	K::Target: KVStorePersister,
+	K::Target: KVStorePersister + KVStoreUnpersister,
 	L::Target: Logger,
 {
 	fn handle_event(&self, event: LdkEvent) {

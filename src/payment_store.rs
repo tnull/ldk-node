@@ -1,4 +1,5 @@
 use crate::hex_utils;
+use crate::io_utils::KVStoreUnpersister;
 use crate::Error;
 
 use lightning::ln::{PaymentHash, PaymentPreimage, PaymentSecret};
@@ -72,7 +73,7 @@ pub(crate) const PAYMENT_INFO_PERSISTENCE_PREFIX: &str = "payments";
 
 pub(crate) struct PaymentInfoStorage<K: Deref>
 where
-	K::Target: KVStorePersister,
+	K::Target: KVStorePersister + KVStoreUnpersister,
 {
 	payments: Mutex<HashMap<PaymentHash, PaymentInfo>>,
 	persister: K,
@@ -80,7 +81,7 @@ where
 
 impl<K: Deref> PaymentInfoStorage<K>
 where
-	K::Target: KVStorePersister,
+	K::Target: KVStorePersister + KVStoreUnpersister,
 {
 	pub(crate) fn from_payments(mut payments: Vec<PaymentInfo>, persister: K) -> Self {
 		let payments = Mutex::new(HashMap::from_iter(
@@ -106,9 +107,15 @@ where
 		return Ok(());
 	}
 
-	// TODO: Need an `unpersist` method for this?
-	//pub(crate) fn remove_payment(&self, payment_hash: &PaymentHash) -> Result<(), Error> {
-	//}
+	pub(crate) fn remove(&self, payment_hash: &PaymentHash) -> Result<(), Error> {
+		let key = format!(
+			"{}/{}",
+			PAYMENT_INFO_PERSISTENCE_PREFIX,
+			hex_utils::to_string(&payment_hash.0)
+		);
+		self.persister.unpersist(&key).map_err(|_| Error::PersistenceFailed)?;
+		Ok(())
+	}
 
 	pub(crate) fn get(&self, payment_hash: &PaymentHash) -> Option<PaymentInfo> {
 		self.payments.lock().unwrap().get(payment_hash).cloned()
