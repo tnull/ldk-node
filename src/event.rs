@@ -1,6 +1,6 @@
 use crate::{
-	hex_utils, ChannelManager, Config, Error, KeysManager, NetworkGraph, PaymentInfo,
-	PaymentInfoStorage, PaymentStatus, Wallet,
+	hex_utils, ChannelManager, Config, Error, KeysManager, NetworkGraph, PaymentDirection,
+	PaymentInfo, PaymentInfoStorage, PaymentStatus, Wallet,
 };
 
 use crate::logger::{log_error, log_info, Logger};
@@ -18,7 +18,7 @@ use lightning::util::ser::{Readable, ReadableArgs, Writeable, Writer};
 
 use bitcoin::secp256k1::Secp256k1;
 use rand::{thread_rng, Rng};
-use std::collections::{hash_map, VecDeque};
+use std::collections::VecDeque;
 use std::ops::Deref;
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
@@ -191,8 +191,7 @@ where
 	channel_manager: Arc<ChannelManager>,
 	network_graph: Arc<NetworkGraph>,
 	keys_manager: Arc<KeysManager>,
-	inbound_payments: Arc<PaymentInfoStorage>,
-	outbound_payments: Arc<PaymentInfoStorage>,
+	payment_store: Arc<PaymentInfoStorage<K>>,
 	tokio_runtime: Arc<tokio::runtime::Runtime>,
 	logger: L,
 	_config: Arc<Config>,
@@ -206,9 +205,8 @@ where
 	pub fn new(
 		wallet: Arc<Wallet<bdk::database::SqliteDatabase>>, event_queue: Arc<EventQueue<K>>,
 		channel_manager: Arc<ChannelManager>, network_graph: Arc<NetworkGraph>,
-		keys_manager: Arc<KeysManager>, inbound_payments: Arc<PaymentInfoStorage>,
-		outbound_payments: Arc<PaymentInfoStorage>, tokio_runtime: Arc<tokio::runtime::Runtime>,
-		logger: L, _config: Arc<Config>,
+		keys_manager: Arc<KeysManager>, payment_store: Arc<PaymentInfoStorage<K>>,
+		tokio_runtime: Arc<tokio::runtime::Runtime>, logger: L, _config: Arc<Config>,
 	) -> Self {
 		Self {
 			event_queue,
@@ -216,8 +214,7 @@ where
 			channel_manager,
 			network_graph,
 			keys_manager,
-			inbound_payments,
-			outbound_payments,
+			payment_store,
 			logger,
 			tokio_runtime,
 			_config,
@@ -326,7 +323,9 @@ where
 						hex_utils::to_string(&payment_hash.0),
 					);
 					self.channel_manager.fail_htlc_backwards(&payment_hash);
-					self.inbound_payments.lock().unwrap().remove(&payment_hash);
+					self.payment_store
+						.set_status(&payment_hash, PaymentStatus::Failed)
+						.expect("Failed to access payment store");
 				}
 			}
 			LdkEvent::PaymentClaimed {
@@ -347,49 +346,50 @@ where
 					}
 					PaymentPurpose::SpontaneousPayment(preimage) => (Some(preimage), None),
 				};
-				let mut payments = self.inbound_payments.lock().unwrap();
-				match payments.entry(payment_hash) {
-					hash_map::Entry::Occupied(mut e) => {
-						let payment = e.get_mut();
-						payment.status = PaymentStatus::Succeeded;
-						payment.preimage = payment_preimage;
-						payment.secret = payment_secret;
-						payment.amount_msat = Some(amount_msat);
-					}
-					hash_map::Entry::Vacant(e) => {
-						e.insert(PaymentInfo {
+
+				let payment_info =
+					if let Some(mut payment_info) = self.payment_store.get(&payment_hash) {
+						payment_info.status = PaymentStatus::Succeeded;
+						payment_info.preimage = payment_preimage;
+						payment_info.secret = payment_secret;
+						payment_info.amount_msat = Some(amount_msat);
+						payment_info
+					} else {
+						PaymentInfo {
 							preimage: payment_preimage,
+							payment_hash,
 							secret: payment_secret,
-							status: PaymentStatus::Succeeded,
 							amount_msat: Some(amount_msat),
-						});
-					}
-				}
+							direction: PaymentDirection::Inbound,
+							status: PaymentStatus::Succeeded,
+						}
+					};
+
+				self.payment_store.insert(payment_info).expect("Failed to access payment store");
 				self.event_queue
 					.add_event(Event::PaymentReceived { payment_hash, amount_msat })
 					.expect("Failed to push to event queue");
 			}
 			LdkEvent::PaymentSent { payment_preimage, payment_hash, fee_paid_msat, .. } => {
-				let mut payments = self.outbound_payments.lock().unwrap();
-				for (hash, payment) in payments.iter_mut() {
-					if *hash == payment_hash {
-						payment.preimage = Some(payment_preimage);
-						payment.status = PaymentStatus::Succeeded;
-						log_info!(
-							self.logger,
-							"Successfully sent payment of {} msats{} from \
-								 payment hash {:?} with preimage {:?}",
-							payment.amount_msat.unwrap(),
-							if let Some(fee) = fee_paid_msat {
-								format!(" (fee {} msats)", fee)
-							} else {
-								"".to_string()
-							},
-							hex_utils::to_string(&payment_hash.0),
-							hex_utils::to_string(&payment_preimage.0)
-						);
-						break;
-					}
+				if let Some(mut payment_info) = self.payment_store.get(&payment_hash) {
+					payment_info.preimage = Some(payment_preimage);
+					payment_info.status = PaymentStatus::Succeeded;
+					self.payment_store
+						.insert(payment_info.clone())
+						.expect("Failed to access payment store");
+					log_info!(
+						self.logger,
+						"Successfully sent payment of {} msats{} from \
+						payment hash {:?} with preimage {:?}",
+						payment_info.amount_msat.unwrap(),
+						if let Some(fee) = fee_paid_msat {
+							format!(" (fee {} msat)", fee)
+						} else {
+							"".to_string()
+						},
+						hex_utils::to_string(&payment_hash.0),
+						hex_utils::to_string(&payment_preimage.0)
+					);
 				}
 				self.event_queue
 					.add_event(Event::PaymentSuccessful { payment_hash })
@@ -402,12 +402,9 @@ where
 					hex_utils::to_string(&payment_hash.0)
 				);
 
-				let mut payments = self.outbound_payments.lock().unwrap();
-				if payments.contains_key(&payment_hash) {
-					let payment = payments.get_mut(&payment_hash).unwrap();
-					assert_eq!(payment.status, PaymentStatus::Pending);
-					payment.status = PaymentStatus::Failed;
-				}
+				self.payment_store
+					.set_status(&payment_hash, PaymentStatus::Failed)
+					.expect("Failed to access payment store");
 				self.event_queue
 					.add_event(Event::PaymentFailed { payment_hash })
 					.expect("Failed to push to event queue");
