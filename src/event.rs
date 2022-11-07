@@ -32,8 +32,8 @@ pub(crate) const EVENTS_PERSISTENCE_KEY: &str = "events";
 /// An event emitted by [`LdkLite`] that should be handled by the user.
 ///
 /// [`LdkLite`]: [`crate::LdkLite`]
-#[derive(Debug, Clone)]
-pub enum LdkLiteEvent {
+#[derive(Debug, Clone, PartialEq)]
+pub enum Event {
 	/// A payment we sent was successful.
 	PaymentSuccessful {
 		/// The hash of the payment.
@@ -562,5 +562,31 @@ impl LdkEventHandler for LdkLiteEventHandler {
 			}
 			LdkEvent::DiscardFunding { .. } => {}
 		}
+	}
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+	use crate::test_utils::TestPersister;
+
+	#[test]
+	fn event_queue_persistence() {
+		let test_persister = Arc::new(TestPersister::new());
+		let event_queue = EventQueue::new(Arc::clone(&test_persister));
+
+		let expected_event = Event::ChannelReady { channel_id: [23u8; 32], user_channel_id: 2323 };
+		event_queue.add_event(expected_event.clone()).unwrap();
+		assert!(test_persister.get_and_clear_pending_persist());
+
+		// Check we get the expected event and that it is returned until we mark it handled.
+		for _ in 0..5 {
+			assert_eq!(event_queue.next_event(), expected_event);
+			assert_eq!(false, test_persister.get_and_clear_pending_persist());
+		}
+
+		// Check we persisted on `event_handled()`
+		event_queue.event_handled().unwrap();
+		assert!(test_persister.get_and_clear_pending_persist());
 	}
 }
