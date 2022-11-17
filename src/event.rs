@@ -1,11 +1,11 @@
 use crate::{
-	hex_utils, ChannelManager, Error, FilesystemPersister, LdkLiteChainAccess, LdkLiteConfig,
+	hex_utils, ChannelManager, Error, LdkLiteChainAccess, LdkLiteConfig,
 	NetworkGraph, PaymentInfo, PaymentInfoStorage, PaymentStatus,
 };
 
 #[allow(unused_imports)]
 use crate::logger::{
-	log_error, log_given_level, log_info, log_internal, log_trace, log_warn, FilesystemLogger,
+	log_error, log_given_level, log_info, log_internal, log_trace, log_warn, 
 	Logger,
 };
 
@@ -22,6 +22,7 @@ use lightning::util::ser::{Readable, ReadableArgs, Writeable, Writer};
 use bitcoin::secp256k1::Secp256k1;
 use rand::{thread_rng, Rng};
 use std::collections::{hash_map, VecDeque};
+use std::ops::Deref;
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
 use std::time::Duration;
@@ -152,14 +153,20 @@ impl Writeable for LdkLiteEvent {
 	}
 }
 
-pub(crate) struct LdkLiteEventQueue<K: KVStorePersister> {
+pub(crate) struct LdkLiteEventQueue<K: Deref>
+where
+	K::Target: KVStorePersister,
+{
 	queue: Mutex<EventQueueSerWrapper>,
 	notifier: Condvar,
-	persister: Arc<K>,
+	persister: K,
 }
 
-impl<K: KVStorePersister> LdkLiteEventQueue<K> {
-	pub(crate) fn new(persister: Arc<K>) -> Self {
+impl<K: Deref> LdkLiteEventQueue<K>
+where
+	K::Target: KVStorePersister,
+{
+	pub(crate) fn new(persister: K) -> Self {
 		let queue: Mutex<EventQueueSerWrapper> = Mutex::new(EventQueueSerWrapper(VecDeque::new()));
 		let notifier = Condvar::new();
 		Self { queue, notifier, persister }
@@ -194,10 +201,13 @@ impl<K: KVStorePersister> LdkLiteEventQueue<K> {
 	}
 }
 
-impl<K: KVStorePersister> ReadableArgs<Arc<K>> for LdkLiteEventQueue<K> {
+impl<K: Deref> ReadableArgs<K> for LdkLiteEventQueue<K>
+where
+	K::Target: KVStorePersister,
+{
 	#[inline]
 	fn read<R: lightning::io::Read>(
-		reader: &mut R, persister: Arc<K>,
+		reader: &mut R, persister: K,
 	) -> Result<Self, lightning::ln::msgs::DecodeError> {
 		let queue: Mutex<EventQueueSerWrapper> = Mutex::new(Readable::read(reader)?);
 		let notifier = Condvar::new();
@@ -230,26 +240,32 @@ impl Writeable for EventQueueSerWrapper {
 	}
 }
 
-pub(crate) struct LdkLiteEventHandler {
-	chain_access: Arc<LdkLiteChainAccess<bdk::sled::Tree>>,
-	event_queue: Arc<LdkLiteEventQueue<FilesystemPersister>>,
+pub(crate) struct LdkLiteEventHandler<K: Deref, L: Deref>
+where
+	K::Target: KVStorePersister,
+	L::Target: Logger,
+{
+	chain_access: Arc<ChainAccess<bdk::sled::Tree>>,
+	event_queue: Arc<EventQueue<K>>,
 	channel_manager: Arc<ChannelManager>,
 	network_graph: Arc<NetworkGraph>,
 	keys_manager: Arc<KeysManager>,
 	inbound_payments: Arc<PaymentInfoStorage>,
 	outbound_payments: Arc<PaymentInfoStorage>,
-	logger: Arc<FilesystemLogger>,
-	_config: Arc<LdkLiteConfig>,
+	logger: L,
+	_config: Arc<Config>,
 }
 
-impl LdkLiteEventHandler {
+impl<K: Deref, L: Deref> LdkLiteEventHandler<K, L>
+where
+	K::Target: KVStorePersister,
+	L::Target: Logger,
+{
 	pub fn new(
-		chain_access: Arc<LdkLiteChainAccess<bdk::sled::Tree>>,
-		event_queue: Arc<LdkLiteEventQueue<FilesystemPersister>>,
+		chain_access: Arc<ChainAccess<bdk::sled::Tree>>, event_queue: Arc<EventQueue<K>>,
 		channel_manager: Arc<ChannelManager>, network_graph: Arc<NetworkGraph>,
 		keys_manager: Arc<KeysManager>, inbound_payments: Arc<PaymentInfoStorage>,
-		outbound_payments: Arc<PaymentInfoStorage>, logger: Arc<FilesystemLogger>,
-		_config: Arc<LdkLiteConfig>,
+		outbound_payments: Arc<PaymentInfoStorage>, logger: L, _config: Arc<Config>,
 	) -> Self {
 		Self {
 			event_queue,
@@ -265,8 +281,12 @@ impl LdkLiteEventHandler {
 	}
 }
 
-impl LdkEventHandler for LdkLiteEventHandler {
-	fn handle_event(&self, event: &LdkEvent) {
+impl<K: Deref, L: Deref> LdkEventHandler for LdkLiteEventHandler<K, L>
+where
+	K::Target: KVStorePersister,
+	L::Target: Logger,
+{
+	fn handle_event(&self, event: LdkEvent) {
 		match event {
 			LdkEvent::FundingGenerationReady {
 				temporary_channel_id,
