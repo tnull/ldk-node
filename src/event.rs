@@ -167,7 +167,7 @@ impl<K: KVStorePersister> LdkLiteEventQueue<K> {
 	pub(crate) fn add_event(&self, event: LdkLiteEvent) -> Result<(), Error> {
 		{
 			let mut locked_queue = self.queue.lock().unwrap();
-			locked_queue.0.push_back(event);
+			locked_queue.0.push_back(Arc::new(event));
 			self.persister.persist(EVENTS_PERSISTENCE_KEY, &*locked_queue)?;
 		}
 
@@ -175,12 +175,12 @@ impl<K: KVStorePersister> LdkLiteEventQueue<K> {
 		Ok(())
 	}
 
-	pub(crate) fn next_event(&self) -> LdkLiteEvent {
+	pub(crate) fn next_event(&self) -> Arc<LdkLiteEvent> {
 		let locked_queue = self
 			.notifier
 			.wait_while(self.queue.lock().unwrap(), |queue| queue.0.is_empty())
 			.unwrap();
-		locked_queue.0.front().unwrap().clone()
+		Arc::clone(&locked_queue.0.front().unwrap())
 	}
 
 	pub(crate) fn event_handled(&self) -> Result<(), Error> {
@@ -205,7 +205,7 @@ impl<K: KVStorePersister> ReadableArgs<Arc<K>> for LdkLiteEventQueue<K> {
 	}
 }
 
-struct EventQueueSerWrapper(VecDeque<LdkLiteEvent>);
+struct EventQueueSerWrapper(VecDeque<Arc<LdkLiteEvent>>);
 
 impl Readable for EventQueueSerWrapper {
 	fn read<R: lightning::io::Read>(
@@ -214,7 +214,7 @@ impl Readable for EventQueueSerWrapper {
 		let len: u16 = Readable::read(reader)?;
 		let mut queue = VecDeque::with_capacity(len as usize);
 		for _ in 0..len {
-			queue.push_back(Readable::read(reader)?);
+			queue.push_back(Arc::new(Readable::read(reader)?));
 		}
 		Ok(EventQueueSerWrapper(queue))
 	}
