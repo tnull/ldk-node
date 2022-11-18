@@ -157,7 +157,7 @@ pub(crate) struct LdkLiteEventQueue<K: Deref>
 where
 	K::Target: KVStorePersister,
 {
-	queue: Mutex<EventQueueSerWrapper>,
+	queue: Mutex<VecDeque<Arc<Event>>>,
 	notifier: Condvar,
 	persister: K,
 }
@@ -167,15 +167,15 @@ where
 	K::Target: KVStorePersister,
 {
 	pub(crate) fn new(persister: K) -> Self {
-		let queue: Mutex<EventQueueSerWrapper> = Mutex::new(EventQueueSerWrapper(VecDeque::new()));
+		let queue: Mutex<VecDeque<Arc<Event>>> = Mutex::new(VecDeque::new());
 		let notifier = Condvar::new();
 		Self { queue, notifier, persister }
 	}
 	pub(crate) fn add_event(&self, event: LdkLiteEvent) -> Result<(), Error> {
 		{
 			let mut locked_queue = self.queue.lock().unwrap();
-			locked_queue.0.push_back(Arc::new(event));
-			self.persister.persist(EVENTS_PERSISTENCE_KEY, &*locked_queue)?;
+			locked_queue.push_back(Arc::new(event));
+			self.persist_queue(&*locked_queue)?;
 		}
 
 		self.notifier.notify_one();
@@ -185,18 +185,25 @@ where
 	pub(crate) fn next_event(&self) -> Arc<LdkLiteEvent> {
 		let locked_queue = self
 			.notifier
-			.wait_while(self.queue.lock().unwrap(), |queue| queue.0.is_empty())
+			.wait_while(self.queue.lock().unwrap(), |queue| queue.is_empty())
 			.unwrap();
-		Arc::clone(&locked_queue.0.front().unwrap())
+		Arc::clone(&locked_queue.front().unwrap())
 	}
 
 	pub(crate) fn event_handled(&self) -> Result<(), Error> {
 		{
 			let mut locked_queue = self.queue.lock().unwrap();
-			locked_queue.0.pop_front();
-			self.persister.persist(EVENTS_PERSISTENCE_KEY, &*locked_queue)?;
+			locked_queue.pop_front();
+			self.persist_queue(&*locked_queue)?;
 		}
 		self.notifier.notify_one();
+		Ok(())
+	}
+
+	fn persist_queue(&self, locked_queue: &VecDeque<Arc<Event>>) -> Result<(), Error> {
+		self.persister
+			.persist(EVENTS_PERSISTENCE_KEY, &EventQueueSerWrapper(locked_queue))
+			.map_err(|_| Error::PersistenceFailed)?;
 		Ok(())
 	}
 }
@@ -209,15 +216,16 @@ where
 	fn read<R: lightning::io::Read>(
 		reader: &mut R, persister: K,
 	) -> Result<Self, lightning::ln::msgs::DecodeError> {
-		let queue: Mutex<EventQueueSerWrapper> = Mutex::new(Readable::read(reader)?);
+		let read_queue: EventQueueDeserWrapper = Readable::read(reader)?;
+		let queue: Mutex<VecDeque<Arc<Event>>> = Mutex::new(read_queue.0);
 		let notifier = Condvar::new();
 		Ok(Self { queue, notifier, persister })
 	}
 }
 
-struct EventQueueSerWrapper(VecDeque<Arc<LdkLiteEvent>>);
+struct EventQueueDeserWrapper(VecDeque<Arc<LdkLiteEvent>>);
 
-impl Readable for EventQueueSerWrapper {
+impl Readable for EventQueueDeserWrapper {
 	fn read<R: lightning::io::Read>(
 		reader: &mut R,
 	) -> Result<Self, lightning::ln::msgs::DecodeError> {
@@ -226,11 +234,13 @@ impl Readable for EventQueueSerWrapper {
 		for _ in 0..len {
 			queue.push_back(Arc::new(Readable::read(reader)?));
 		}
-		Ok(EventQueueSerWrapper(queue))
+		Ok(Self(queue))
 	}
 }
 
-impl Writeable for EventQueueSerWrapper {
+struct EventQueueSerWrapper<'a>(&'a VecDeque<Arc<Event>>);
+
+impl Writeable for EventQueueSerWrapper<'_> {
 	fn write<W: Writer>(&self, writer: &mut W) -> Result<(), lightning::io::Error> {
 		(self.0.len() as u16).write(writer)?;
 		for e in self.0.iter() {
@@ -601,7 +611,7 @@ mod tests {
 
 		// Check we get the expected event and that it is returned until we mark it handled.
 		for _ in 0..5 {
-			assert_eq!(event_queue.next_event(), expected_event);
+			assert_eq!(*event_queue.next_event(), expected_event);
 			assert_eq!(false, test_persister.get_and_clear_pending_persist());
 		}
 
