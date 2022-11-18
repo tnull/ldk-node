@@ -15,7 +15,7 @@ use bdk::{FeeRate, SignOptions, SyncOptions};
 use bitcoin::{Script, Transaction};
 
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 
 pub struct Wallet<D>
 where
@@ -27,6 +27,7 @@ where
 	wallet: Mutex<bdk::Wallet<D>>,
 	// A cache storing the most recently retrieved fee rate estimations.
 	fee_rate_cache: Mutex<HashMap<ConfirmationTarget, FeeRate>>,
+	tokio_runtime: RwLock<Option<Arc<tokio::runtime::Runtime>>>,
 	logger: Arc<FilesystemLogger>,
 }
 
@@ -39,30 +40,49 @@ where
 	) -> Self {
 		let wallet = Mutex::new(wallet);
 		let fee_rate_cache = Mutex::new(HashMap::new());
-		Self { blockchain, wallet, fee_rate_cache, logger }
+		let tokio_runtime = RwLock::new(None);
+		Self { blockchain, wallet, fee_rate_cache, tokio_runtime, logger }
 	}
 
 	pub(crate) async fn sync(&self) -> Result<(), Error> {
 		let sync_options = SyncOptions { progress: None };
+		match self.wallet.lock().unwrap().sync(&self.blockchain, sync_options).await {
+			Ok(()) => Ok(()),
+			Err(e) => {
+				log_error!(self.logger, "Wallet sync error: {}", e);
+				Err(e)?
+			}
+		}
+	}
 
-		self.wallet.lock().unwrap().sync(&self.blockchain, sync_options)?;
+	pub(crate) fn set_runtime(&self, tokio_runtime: Arc<tokio::runtime::Runtime>) {
+		*self.tokio_runtime.write().unwrap() = Some(tokio_runtime);
+	}
 
-		Ok(())
+	pub(crate) fn drop_runtime(&self) {
+		*self.tokio_runtime.write().unwrap() = None;
 	}
 
 	pub(crate) fn create_funding_transaction(
 		&self, output_script: &Script, value_sats: u64, confirmation_target: ConfirmationTarget,
 	) -> Result<Transaction, Error> {
-		let num_blocks = num_blocks_from_conf_target(confirmation_target);
-		let fee_rate = self.blockchain.estimate_fee(num_blocks)?;
+		let fee_rate = self.estimate_fee_rate(confirmation_target);
 
 		let locked_wallet = self.wallet.lock().unwrap();
 		let mut tx_builder = locked_wallet.build_tx();
 
 		tx_builder.add_recipient(output_script.clone(), value_sats).fee_rate(fee_rate).enable_rbf();
 
-		let (mut psbt, _) = tx_builder.finish()?;
-		log_trace!(self.logger, "Created funding PSBT: {:?}", psbt);
+		let mut psbt = match tx_builder.finish() {
+			Ok((psbt, _)) => {
+				log_trace!(self.logger, "Created funding PSBT: {:?}", psbt);
+				psbt
+			}
+			Err(err) => {
+				log_error!(self.logger, "Failed to create funding transaction: {}", err);
+				Err(err)?
+			}
+		};
 
 		// We double-check that no inputs try to spend non-witness outputs. As we use a SegWit
 		// wallet descriptor this technically shouldn't ever happen, but better safe than sorry.
@@ -84,6 +104,44 @@ where
 		let address_info = self.wallet.lock().unwrap().get_address(AddressIndex::New)?;
 		Ok(address_info.address)
 	}
+
+	fn estimate_fee_rate(&self, confirmation_target: ConfirmationTarget) -> FeeRate {
+		let mut locked_fee_rate_cache = self.fee_rate_cache.lock().unwrap();
+		let num_blocks = num_blocks_from_conf_target(confirmation_target);
+
+		// We'll fall back on this, if we really don't have any other information.
+		let fallback_rate = fallback_fee_from_conf_target(confirmation_target);
+
+		let locked_runtime = self.tokio_runtime.read().unwrap();
+		if locked_runtime.as_ref().is_none() {
+			log_error!(self.logger, "Failed to update fee rate estimation: No runtime.");
+			return *locked_fee_rate_cache.get(&confirmation_target).unwrap_or(&fallback_rate);
+		}
+
+		let est_fee_rate = tokio::task::block_in_place(move || {
+			locked_runtime
+				.as_ref()
+				.unwrap()
+				.handle()
+				.block_on(async move { self.blockchain.estimate_fee(num_blocks).await })
+		});
+
+		match est_fee_rate {
+			Ok(rate) => {
+				locked_fee_rate_cache.insert(confirmation_target, rate);
+				log_trace!(
+					self.logger,
+					"Fee rate estimation updated: {} sats/kwu",
+					rate.fee_wu(1000)
+				);
+				rate
+			}
+			Err(e) => {
+				log_error!(self.logger, "Failed to update fee rate estimation: {}", e);
+				*locked_fee_rate_cache.get(&confirmation_target).unwrap_or(&fallback_rate)
+			}
+		}
+	}
 }
 
 impl<D> FeeEstimator for Wallet<D>
@@ -91,24 +149,8 @@ where
 	D: BatchDatabase,
 {
 	fn get_est_sat_per_1000_weight(&self, confirmation_target: ConfirmationTarget) -> u32 {
-		let mut locked_fee_rate_cache = self.fee_rate_cache.lock().unwrap();
-		let num_blocks = num_blocks_from_conf_target(confirmation_target);
-
-		// We'll fall back on this, if we really don't have any other information.
-		let fallback_rate = fallback_fee_from_conf_target(confirmation_target);
-
-		let fee_rate = match self.blockchain.estimate_fee(num_blocks) {
-			Ok(rate) => {
-				locked_fee_rate_cache.insert(confirmation_target, rate);
-				rate.fee_wu(1000) as u32
-			}
-			Err(_) => locked_fee_rate_cache
-				.get(&confirmation_target)
-				.map_or(fallback_rate, |cached_rate| cached_rate.fee_wu(1000) as u32),
-		};
-
-		// Never go lower than the floor.
-		fee_rate.max(FEERATE_FLOOR_SATS_PER_KW)
+		(self.estimate_fee_rate(confirmation_target).fee_wu(1000) as u32)
+			.max(FEERATE_FLOOR_SATS_PER_KW)
 	}
 }
 
@@ -117,7 +159,20 @@ where
 	D: BatchDatabase,
 {
 	fn broadcast_transaction(&self, tx: &Transaction) {
-		match self.blockchain.broadcast(tx) {
+		let locked_runtime = self.tokio_runtime.read().unwrap();
+		if locked_runtime.as_ref().is_none() {
+			log_error!(self.logger, "Failed to broadcast transaction: No runtime.");
+			panic!("Failed to broadcast transaction: No runtime.");
+		}
+
+		let res = tokio::task::block_in_place(move || {
+			locked_runtime
+				.as_ref()
+				.unwrap()
+				.block_on(async move { self.blockchain.broadcast(tx).await })
+		});
+
+		match res {
 			Ok(_) => {}
 			Err(err) => {
 				log_error!(self.logger, "Failed to broadcast transaction: {}", err);
@@ -135,10 +190,12 @@ fn num_blocks_from_conf_target(confirmation_target: ConfirmationTarget) -> usize
 	}
 }
 
-fn fallback_fee_from_conf_target(confirmation_target: ConfirmationTarget) -> u32 {
-	match confirmation_target {
+fn fallback_fee_from_conf_target(confirmation_target: ConfirmationTarget) -> FeeRate {
+	let sats_kwu = match confirmation_target {
 		ConfirmationTarget::Background => FEERATE_FLOOR_SATS_PER_KW,
 		ConfirmationTarget::Normal => 2000,
 		ConfirmationTarget::HighPriority => 5000,
-	}
+	};
+
+	FeeRate::from_sat_per_kwu(sats_kwu as f32)
 }

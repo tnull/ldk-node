@@ -1,4 +1,3 @@
-use bdk::blockchain::esplora;
 use std::fmt;
 
 #[derive(Debug)]
@@ -32,10 +31,8 @@ pub enum Error {
 	WalletOperationFailed,
 	/// A siging operation failed.
 	WalletSigningFailed,
-	/// A chain access operation failed.
-	ChainAccessFailed,
-	/// An inconsisteny was encounterd during chain access.
-	ChainAccessInconsistency,
+	/// A transaction sync operation failed.
+	TxSyncFailed,
 }
 
 impl fmt::Display for Error {
@@ -57,10 +54,7 @@ impl fmt::Display for Error {
 			Self::PersistenceFailed => write!(f, "Failed to persist data."),
 			Self::WalletOperationFailed => write!(f, "Failed to conduct wallet operation."),
 			Self::WalletSigningFailed => write!(f, "Failed to sign given transaction."),
-			Self::ChainAccessFailed => write!(f, "Failed to conduct chain access operation."),
-			Self::ChainAccessInconsistency => {
-				write!(f, "Encountered an inconsisteny during chain access.")
-			}
+			Self::TxSyncFailed => write!(f, "Failed to sync transactions."),
 		}
 	}
 }
@@ -76,8 +70,10 @@ impl From<bdk::Error> for Error {
 	}
 }
 
-impl From<esplora::EsploraError> for Error {
-	fn from(_e: esplora::EsploraError) -> Self {
-		Self::ChainAccessFailed
+impl From<lightning_transaction_sync::TxSyncError> for Error {
+	fn from(e: lightning_transaction_sync::TxSyncError) -> Self {
+		match e {
+			_ => Self::TxSyncFailed,
+		}
 	}
 }

@@ -31,7 +31,7 @@ mod io_utils;
 mod logger;
 mod peer_store;
 #[cfg(test)]
-mod test_utils;
+mod tests;
 mod wallet;
 
 pub use error::Error;
@@ -62,7 +62,7 @@ use lightning_background_processor::BackgroundProcessor;
 use lightning_background_processor::GossipSync as BPGossipSync;
 use lightning_persister::FilesystemPersister;
 
-use lightning_transaction_sync::esplora::EsploraSync;
+use lightning_transaction_sync::EsploraSyncClient;
 
 use lightning_net_tokio::SocketDescriptor;
 
@@ -83,6 +83,7 @@ use rand::Rng;
 
 use std::collections::HashMap;
 use std::convert::{TryFrom, TryInto};
+use std::default::Default;
 use std::fs;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -108,10 +109,29 @@ pub struct Config {
 	pub esplora_server_url: String,
 	/// The used Bitcoin network.
 	pub network: bitcoin::Network,
-	/// The TCP port the network node will listen on.
-	pub listening_port: Option<u16>,
+	/// The IP address and TCP port the node will listen on.
+	pub listening_address: Option<String>,
 	/// The default CLTV expiry delta to be used for payments.
 	pub default_cltv_expiry_delta: u32,
+}
+
+impl Default for Config {
+	fn default() -> Self {
+		// Set the config defaults
+		let storage_dir_path = "/tmp/ldk_lite/".to_string();
+		let esplora_server_url = "https://blockstream.info/api".to_string();
+		let network = bitcoin::Network::Regtest;
+		let listening_address = Some("0.0.0.0:9735".to_string());
+		let default_cltv_expiry_delta = 144;
+
+		Self {
+			storage_dir_path,
+			esplora_server_url,
+			network,
+			listening_address,
+			default_cltv_expiry_delta,
+		}
+	}
 }
 
 /// A builder for an [`LdkLite`] instance, allowing to set some configuration and module choices from
@@ -124,20 +144,7 @@ pub struct Builder {
 impl Builder {
 	/// Creates a new builder instance with the default configuration.
 	pub fn new() -> Self {
-		// Set the config defaults
-		let storage_dir_path = "/tmp/ldk_lite/".to_string();
-		let esplora_server_url = "https://blockstream.info/api".to_string();
-		let network = bitcoin::Network::Testnet;
-		let listening_port = Some(9735);
-		let default_cltv_expiry_delta = 144;
-
-		let config = Config {
-			storage_dir_path,
-			esplora_server_url,
-			network,
-			listening_port,
-			default_cltv_expiry_delta,
-		};
+		let config = Config::default();
 
 		Self { config }
 	}
@@ -175,16 +182,17 @@ impl Builder {
 			"testnet" => bitcoin::Network::Testnet,
 			"regtest" => bitcoin::Network::Regtest,
 			"signet" => bitcoin::Network::Signet,
-			_ => bitcoin::Network::Testnet,
+			_ => bitcoin::Network::Regtest,
 		};
 		self
 	}
 
-	/// Sets the port on which [`LdkLite`] will listen for incoming network connections.
+	/// Sets the IP address and TCP port on which [`LdkLite`] will listen for incoming network connections.
 	///
-	/// Default: `9735`
-	pub fn set_listening_port(&mut self, listening_port: u16) -> &mut Self {
-		self.config.listening_port = Some(listening_port);
+	/// Format: `ADDR:PORT`
+	/// Default: `0.0.0.0:9735`
+	pub fn set_listening_address(&mut self, listening_address: String) -> &mut Self {
+		self.config.listening_address = Some(listening_address);
 		self
 	}
 
@@ -233,8 +241,10 @@ impl Builder {
 
 		let wallet = Arc::new(Wallet::new(blockchain, bdk_wallet, Arc::clone(&logger)));
 
-		let tx_sync =
-			Arc::new(EsploraSync::new(config.esplora_server_url.clone(), Arc::clone(&logger)));
+		let tx_sync = Arc::new(EsploraSyncClient::new(
+			config.esplora_server_url.clone(),
+			Arc::clone(&logger),
+		));
 
 		// Step 3: Initialize Persist
 		let persister = Arc::new(FilesystemPersister::new(ldk_data_dir.clone()));
@@ -373,7 +383,7 @@ impl Builder {
 			Arc::new(EventQueue::new(Arc::clone(&persister)))
 		};
 
-		let event_handler = EventHandler::new(
+		let event_handler = Arc::new(EventHandler::new(
 			Arc::clone(&wallet),
 			Arc::clone(&event_queue),
 			Arc::clone(&channel_manager),
@@ -383,7 +393,7 @@ impl Builder {
 			Arc::clone(&outbound_payments),
 			Arc::clone(&logger),
 			Arc::clone(&config),
-		);
+		));
 
 		//// Step 16: Create Router and InvoicePayer
 		let router = DefaultRouter::new(
@@ -397,7 +407,7 @@ impl Builder {
 			Arc::clone(&channel_manager),
 			router,
 			Arc::clone(&logger),
-			event_handler,
+			Arc::clone(&event_handler),
 			payment::Retry::Timeout(LDK_PAYMENT_RETRY_TIMEOUT),
 		));
 
@@ -422,6 +432,7 @@ impl Builder {
 			wallet,
 			tx_sync,
 			event_queue,
+			event_handler,
 			channel_manager,
 			chain_monitor,
 			peer_manager,
@@ -441,7 +452,7 @@ impl Builder {
 /// Wraps all objects that need to be preserved during the run time of [`LdkLite`]. Will be dropped
 /// upon [`LdkLite::stop()`].
 struct Runtime {
-	tokio_runtime: tokio::runtime::Runtime,
+	tokio_runtime: Arc<tokio::runtime::Runtime>,
 	_background_processor: BackgroundProcessor,
 	stop_networking: Arc<AtomicBool>,
 	stop_wallet_sync: Arc<AtomicBool>,
@@ -454,8 +465,9 @@ pub struct LdkLite {
 	running: RwLock<Option<Runtime>>,
 	config: Arc<Config>,
 	wallet: Arc<Wallet<bdk::sled::Tree>>,
-	tx_sync: Arc<EsploraSync<Arc<FilesystemLogger>>>,
+	tx_sync: Arc<EsploraSyncClient<Arc<FilesystemLogger>>>,
 	event_queue: Arc<EventQueue<Arc<FilesystemPersister>>>,
+	event_handler: Arc<EventHandler<Arc<FilesystemPersister>, Arc<FilesystemLogger>>>,
 	channel_manager: Arc<ChannelManager>,
 	chain_monitor: Arc<ChainMonitor>,
 	peer_manager: Arc<PeerManager>,
@@ -464,7 +476,8 @@ pub struct LdkLite {
 	persister: Arc<FilesystemPersister>,
 	logger: Arc<FilesystemLogger>,
 	scorer: Arc<Mutex<Scorer>>,
-	invoice_payer: Arc<InvoicePayer<EventHandler<Arc<FilesystemPersister>, Arc<FilesystemLogger>>>>,
+	invoice_payer:
+		Arc<InvoicePayer<Arc<EventHandler<Arc<FilesystemPersister>, Arc<FilesystemLogger>>>>>,
 	inbound_payments: Arc<PaymentInfoStorage>,
 	outbound_payments: Arc<PaymentInfoStorage>,
 	peer_store: Arc<PeerInfoStorage<FilesystemPersister>>,
@@ -503,6 +516,10 @@ impl LdkLite {
 		runtime.stop_networking.store(true, Ordering::Release);
 		self.peer_manager.disconnect_all_peers();
 
+		// Drop the held runtimes.
+		self.wallet.drop_runtime();
+		self.event_handler.drop_runtime();
+
 		// Drop the runtime, which stops the background processor and any possibly remaining tokio threads.
 		*run_lock = None;
 		Ok(())
@@ -510,7 +527,10 @@ impl LdkLite {
 
 	fn setup_runtime(&self) -> Result<Runtime, Error> {
 		let tokio_runtime =
-			tokio::runtime::Builder::new_multi_thread().enable_all().build().unwrap();
+			Arc::new(tokio::runtime::Builder::new_multi_thread().enable_all().build().unwrap());
+
+		self.wallet.set_runtime(Arc::clone(&tokio_runtime));
+		self.event_handler.set_runtime(Arc::clone(&tokio_runtime));
 
 		// Setup wallet sync
 		let wallet = Arc::clone(&self.wallet);
@@ -521,53 +541,63 @@ impl LdkLite {
 		let stop_wallet_sync = Arc::new(AtomicBool::new(false));
 		let stop_sync = Arc::clone(&stop_wallet_sync);
 
-		tokio_runtime.spawn(async move {
-			let mut rounds = 0;
-			loop {
-				if stop_sync.load(Ordering::Acquire) {
-					return;
-				}
-				// As syncing the on-chain wallet is much more time-intesive, we only sync every
-				// fifth round.
-				if rounds == 0 {
-					let now = Instant::now();
-					match wallet.sync().await {
-						Ok(()) => log_info!(
-							sync_logger,
-							"On-chain wallet sync finished in {}ms.",
-							now.elapsed().as_millis()
-						),
-						Err(_) => log_error!(sync_logger, "On-chain wallet sync failed"),
-					}
-				}
-				rounds = (rounds + 1) % 5;
+		std::thread::spawn(move || {
+			tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap().block_on(
+				async move {
+					let mut rounds = 0;
+					loop {
+						if stop_sync.load(Ordering::Acquire) {
+							return;
+						}
+						// As syncing the on-chain wallet is much more time-intesive, we only sync every
+						// fifth round.
+						if rounds == 0 {
+							let now = Instant::now();
+							match wallet.sync().await {
+								Ok(()) => log_info!(
+									sync_logger,
+									"On-chain wallet sync finished in {}ms.",
+									now.elapsed().as_millis()
+								),
+								Err(err) => {
+									log_error!(sync_logger, "On-chain wallet sync failed: {}", err)
+								}
+							}
+						}
+						rounds = (rounds + 1) % 5;
 
-				let confirmables = vec![
-					&*sync_cman as &(dyn Confirm + Sync + Send),
-					&*sync_cmon as &(dyn Confirm + Sync + Send),
-				];
-				let now = Instant::now();
-				match tx_sync.sync(confirmables).await {
-					Ok(()) => log_info!(
-						sync_logger,
-						"Lightning wallet sync finished in {}ms.",
-						now.elapsed().as_millis()
-					),
-					Err(e) => log_error!(sync_logger, "Lightning wallet sync failed: {}", e),
-				}
-				tokio::time::sleep(Duration::from_secs(5)).await;
-			}
+						let confirmables = vec![
+							&*sync_cman as &(dyn Confirm + Sync + Send),
+							&*sync_cmon as &(dyn Confirm + Sync + Send),
+						];
+						let now = Instant::now();
+						match tx_sync.sync(confirmables).await {
+							Ok(()) => log_info!(
+								sync_logger,
+								"Lightning wallet sync finished in {}ms.",
+								now.elapsed().as_millis()
+							),
+							Err(e) => {
+								log_error!(sync_logger, "Lightning wallet sync failed: {}", e)
+							}
+						}
+						tokio::time::sleep(Duration::from_secs(5)).await;
+					}
+				},
+			);
 		});
 
 		let stop_networking = Arc::new(AtomicBool::new(false));
-		if let Some(listening_port) = self.config.listening_port {
+		if let Some(listening_address) = &self.config.listening_address {
 			// Setup networking
 			let peer_manager_connection_handler = Arc::clone(&self.peer_manager);
 			let stop_listen = Arc::clone(&stop_networking);
+			let listening_address = listening_address.clone();
+
 			tokio_runtime.spawn(async move {
 				let listener =
-					tokio::net::TcpListener::bind(format!("0.0.0.0:{}", listening_port)).await.expect(
-						"Failed to bind to listen port - is something else already listening on it?",
+					tokio::net::TcpListener::bind(listening_address).await.expect(
+						"Failed to bind to listen address/port - is something else already listening on it?",
 						);
 				loop {
 					if stop_listen.load(Ordering::Acquire) {
@@ -651,20 +681,17 @@ impl LdkLite {
 	}
 
 	/// Returns our own node id
-	pub fn my_node_id(&self) -> Result<PublicKey, Error> {
-		if self.running.read().unwrap().is_none() {
-			return Err(Error::NotRunning);
-		}
-
+	pub fn node_id(&self) -> Result<PublicKey, Error> {
 		Ok(self.channel_manager.get_our_node_id())
+	}
+
+	/// Returns our own listening address and port.
+	pub fn listening_address(&self) -> Option<String> {
+		self.config.listening_address.clone()
 	}
 
 	/// Retrieve a new on-chain/funding address.
 	pub fn new_funding_address(&mut self) -> Result<bitcoin::Address, Error> {
-		if self.running.read().unwrap().is_none() {
-			return Err(Error::NotRunning);
-		}
-
 		let funding_address = self.wallet.get_new_address()?;
 		log_info!(self.logger, "Generated new funding address: {}", funding_address);
 		Ok(funding_address)
@@ -691,15 +718,17 @@ impl LdkLite {
 		let con_logger = Arc::clone(&self.logger);
 		let con_pm = Arc::clone(&self.peer_manager);
 
-		runtime.tokio_runtime.block_on(async move {
-			let res = connect_peer_if_necessary(
-				con_peer_info.pubkey,
-				con_peer_info.address,
-				con_pm,
-				con_logger,
-			)
-			.await;
-			con_success_cloned.store(res.is_ok(), Ordering::Release);
+		tokio::task::block_in_place(move || {
+			runtime.tokio_runtime.block_on(async move {
+				let res = connect_peer_if_necessary(
+					con_peer_info.pubkey,
+					con_peer_info.address,
+					con_pm,
+					con_logger,
+					)
+					.await;
+				con_success_cloned.store(res.is_ok(), Ordering::Release);
+			})
 		});
 
 		if !con_success.load(Ordering::Acquire) {
@@ -742,6 +771,33 @@ impl LdkLite {
 				Err(Error::ChannelCreationFailed)
 			}
 		}
+	}
+
+	#[cfg(test)]
+	pub fn sync_wallets(&self) -> Result<(), Error> {
+		let runtime_lock = self.running.read().unwrap();
+		if runtime_lock.is_none() {
+			return Err(Error::NotRunning);
+		}
+		let wallet = Arc::clone(&self.wallet);
+		let tx_sync = Arc::clone(&self.tx_sync);
+		let sync_cman = Arc::clone(&self.channel_manager);
+		let sync_cmon = Arc::clone(&self.chain_monitor);
+		let confirmables = vec![
+			&*sync_cman as &(dyn Confirm + Sync + Send),
+			&*sync_cmon as &(dyn Confirm + Sync + Send),
+		];
+
+		let runtime = runtime_lock.as_ref().unwrap();
+		tokio::task::block_in_place(move || {
+			runtime.tokio_runtime.block_on(async move { wallet.sync().await })
+		})?;
+
+		tokio::task::block_in_place(move || {
+			runtime.tokio_runtime.block_on(async move { tx_sync.sync(confirmables).await })
+		})?;
+
+		Ok(())
 	}
 
 	/// Close a previously opened channel.
@@ -990,7 +1046,7 @@ pub enum PaymentStatus {
 
 type ChainMonitor = chainmonitor::ChainMonitor<
 	InMemorySigner,
-	Arc<EsploraSync<Arc<FilesystemLogger>>>,
+	Arc<EsploraSyncClient<Arc<FilesystemLogger>>>,
 	Arc<Wallet<bdk::sled::Tree>>,
 	Arc<Wallet<bdk::sled::Tree>>,
 	Arc<FilesystemLogger>,
@@ -1026,6 +1082,3 @@ pub(crate) type NetworkGraph = gossip::NetworkGraph<Arc<FilesystemLogger>>;
 pub(crate) type PaymentInfoStorage = Mutex<HashMap<PaymentHash, PaymentInfo>>;
 
 pub(crate) type OnionMessenger = SimpleArcOnionMessenger<FilesystemLogger>;
-
-#[cfg(test)]
-mod tests {}

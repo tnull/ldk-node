@@ -19,8 +19,7 @@ use bitcoin::secp256k1::Secp256k1;
 use rand::{thread_rng, Rng};
 use std::collections::{hash_map, VecDeque};
 use std::ops::Deref;
-use std::sync::{Arc, Condvar, Mutex};
-use std::thread;
+use std::sync::{Arc, Condvar, Mutex, RwLock};
 use std::time::Duration;
 
 /// The event queue will be persisted under this key.
@@ -257,6 +256,7 @@ where
 	keys_manager: Arc<KeysManager>,
 	inbound_payments: Arc<PaymentInfoStorage>,
 	outbound_payments: Arc<PaymentInfoStorage>,
+	tokio_runtime: RwLock<Option<Arc<tokio::runtime::Runtime>>>,
 	logger: L,
 	_config: Arc<Config>,
 }
@@ -272,6 +272,7 @@ where
 		keys_manager: Arc<KeysManager>, inbound_payments: Arc<PaymentInfoStorage>,
 		outbound_payments: Arc<PaymentInfoStorage>, logger: L, _config: Arc<Config>,
 	) -> Self {
+		let tokio_runtime = RwLock::new(None);
 		Self {
 			event_queue,
 			wallet,
@@ -281,8 +282,17 @@ where
 			inbound_payments,
 			outbound_payments,
 			logger,
+			tokio_runtime,
 			_config,
 		}
+	}
+
+	pub(crate) fn set_runtime(&self, tokio_runtime: Arc<tokio::runtime::Runtime>) {
+		*self.tokio_runtime.write().unwrap() = Some(tokio_runtime);
+	}
+
+	pub(crate) fn drop_runtime(&self) {
+		*self.tokio_runtime.write().unwrap() = None;
 	}
 }
 
@@ -324,8 +334,7 @@ where
 							log_error!(self.logger, "Channel went away before we could fund it. The peer disconnected or refused the channel");
 						}
 					}
-					Err(err) => {
-						log_error!(self.logger, "Failed to create funding transaction: {}", err);
+					Err(_err) => {
 						self.channel_manager
 							.force_close_without_broadcasting_txn(
 								&temporary_channel_id,
@@ -359,9 +368,6 @@ where
 
 				if let Some(preimage) = payment_preimage {
 					self.channel_manager.claim_funds(preimage);
-					self.event_queue
-						.add_event(Event::PaymentReceived { payment_hash, amount_msat })
-						.expect("Failed to push to event queue");
 				} else {
 					log_error!(
 						self.logger,
@@ -453,14 +459,18 @@ where
 			LdkEvent::ProbeFailed { .. } => {}
 			LdkEvent::HTLCHandlingFailed { .. } => {}
 			LdkEvent::PendingHTLCsForwardable { time_forwardable } => {
+				let locked_runtime = self.tokio_runtime.read().unwrap();
+				if locked_runtime.as_ref().is_none() {
+					return;
+				}
+
 				let forwarding_channel_manager = self.channel_manager.clone();
 				let min = time_forwardable.as_millis() as u64;
 
-				// TODO: any way we still can use tokio here?
-				// TODO: stop this thread on shutdown
-				thread::spawn(move || {
+				locked_runtime.as_ref().unwrap().spawn(async move {
 					let millis_to_sleep = thread_rng().gen_range(min..min * 5) as u64;
-					thread::sleep(Duration::from_millis(millis_to_sleep));
+					tokio::time::sleep(Duration::from_millis(millis_to_sleep)).await;
+
 					forwarding_channel_manager.process_pending_htlc_forwards();
 				});
 			}
@@ -582,7 +592,7 @@ where
 #[cfg(test)]
 mod tests {
 	use super::*;
-	use crate::test_utils::TestPersister;
+	use crate::tests::test_utils::TestPersister;
 
 	#[test]
 	fn event_queue_persistence() {
