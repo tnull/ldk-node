@@ -10,10 +10,11 @@ use lightning::chain::chaininterface::{
 use bdk::blockchain::{Blockchain, EsploraBlockchain};
 use bdk::database::BatchDatabase;
 use bdk::wallet::AddressIndex;
-use bdk::{SignOptions, SyncOptions};
+use bdk::{FeeRate, SignOptions, SyncOptions};
 
 use bitcoin::{Script, Transaction};
 
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 pub struct Wallet<D>
@@ -24,6 +25,8 @@ where
 	blockchain: EsploraBlockchain,
 	// A BDK on-chain wallet.
 	wallet: Mutex<bdk::Wallet<D>>,
+	// A cache storing the most recently retrieved fee rate estimations.
+	fee_rate_cache: Mutex<HashMap<ConfirmationTarget, FeeRate>>,
 	logger: Arc<FilesystemLogger>,
 }
 
@@ -35,11 +38,8 @@ where
 		blockchain: EsploraBlockchain, wallet: bdk::Wallet<D>, logger: Arc<FilesystemLogger>,
 	) -> Self {
 		let wallet = Mutex::new(wallet);
-		Self {
-			blockchain,
-			wallet,
-			logger,
-		}
+		let fee_rate_cache = Mutex::new(HashMap::new());
+		Self { blockchain, wallet, fee_rate_cache, logger }
 	}
 
 	pub(crate) async fn sync(&self) -> Result<(), Error> {
@@ -91,11 +91,24 @@ where
 	D: BatchDatabase,
 {
 	fn get_est_sat_per_1000_weight(&self, confirmation_target: ConfirmationTarget) -> u32 {
+		let mut locked_fee_rate_cache = self.fee_rate_cache.lock().unwrap();
 		let num_blocks = num_blocks_from_conf_target(confirmation_target);
-		let fallback_fee = fallback_fee_from_conf_target(confirmation_target);
-		self.blockchain.estimate_fee(num_blocks).map_or(fallback_fee, |fee_rate| {
-			(fee_rate.fee_wu(1000) as u32).max(FEERATE_FLOOR_SATS_PER_KW)
-		}) as u32
+
+		// We'll fall back on this, if we really don't have any other information.
+		let fallback_rate = fallback_fee_from_conf_target(confirmation_target);
+
+		let fee_rate = match self.blockchain.estimate_fee(num_blocks) {
+			Ok(rate) => {
+				locked_fee_rate_cache.insert(confirmation_target, rate);
+				rate.fee_wu(1000) as u32
+			}
+			Err(_) => locked_fee_rate_cache
+				.get(&confirmation_target)
+				.map_or(fallback_rate, |cached_rate| cached_rate.fee_wu(1000) as u32),
+		};
+
+		// Never go lower than the floor.
+		fee_rate.max(FEERATE_FLOOR_SATS_PER_KW)
 	}
 }
 
