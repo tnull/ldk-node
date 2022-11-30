@@ -30,15 +30,28 @@ lightning-background-processor = { git = "https://github.com/tnull/rust-lightnin
 lightning-rapid-gossip-sync = { git = "https://github.com/tnull/rust-lightning", branch="2022-11-add-transaction-sync-crate" }
 lightning-transaction-sync = { git = "https://github.com/tnull/rust-lightning", branch="2022-11-add-transaction-sync-crate", features = ["esplora-async"] }
 
-bdk = { git = "https://github.com/tnull/bdk.git", branch="2022-10-use-esplora-merkleblock", features = ["use-esplora-async", "key-value-db"]}
+#lightning = { path = "../rust-lightning/lightning", features = ["max_level_trace", "std"] }
+#lightning-invoice = { path = "../rust-lightning/lightning-invoice" }
+#lightning-net-tokio = { path = "../rust-lightning/lightning-net-tokio" }
+#lightning-persister = { path = "../rust-lightning/lightning-persister" }
+#lightning-background-processor = { path = "../rust-lightning/lightning-background-processor" }
+#lightning-rapid-gossip-sync = { path = "../rust-lightning/lightning-rapid-gossip-sync" }
+#lightning-transaction-sync = { path = "../rust-lightning/lightning-transaction-sync", features = ["esplora-async"] }
+
+bdk = { git = "https://github.com/tnull/bdk.git", branch="2022-10-use-esplora-merkleblock", default-features = false, features = ["async-interface", "use-esplora-async", "key-value-db"]}
 bitcoin = "0.29.2"
 
 rand = "0.8.5"
 chrono = "0.4"
 futures = "0.3"
 serde_json = { version = "1.0" }
-tokio = { version = "1", features = [ "io-util", "macros", "rt", "rt-multi-thread", "sync", "net", "time" ] }
+tokio = { version = "1", features = [ "full" ] }
 
+[dev-dependencies]
+electrsd = { version = "0.22.0", features = ["legacy", "esplora_a33e97e1", "bitcoind_23_0"] }
+electrum-client = "0.12.0"
+lazy_static = "1.4.0"
+once_cell = "1.16.0"
 
 [profile.release]
 panic = "abort"
