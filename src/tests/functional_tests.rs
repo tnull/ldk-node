@@ -121,7 +121,7 @@ fn rand_config() -> Config {
 }
 
 #[test]
-fn full_channel_cycle() {
+fn channel_full_cycle() {
 	println!("== Node A ==");
 	let config_a = rand_config();
 	let mut node_a = Builder::from_config(config_a).build();
