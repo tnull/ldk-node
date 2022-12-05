@@ -66,7 +66,7 @@ use lightning_transaction_sync::EsploraSyncClient;
 
 use lightning_net_tokio::SocketDescriptor;
 
-use lightning_invoice::utils::DefaultRouter;
+use lightning::routing::router::DefaultRouter;
 use lightning_invoice::{payment, Currency, Invoice};
 
 use bdk::bitcoin::secp256k1::Secp256k1;
