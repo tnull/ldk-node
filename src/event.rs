@@ -25,17 +25,17 @@ use std::time::Duration;
 /// The event queue will be persisted under this key.
 pub(crate) const EVENTS_PERSISTENCE_KEY: &str = "events";
 
-/// An event emitted by [`LdkLite`] that should be handled by the user.
+/// An event emitted by [`LdkLite`], which should be handled by the user.
 ///
 /// [`LdkLite`]: [`crate::LdkLite`]
 #[derive(Debug, Clone, PartialEq)]
 pub enum Event {
-	/// A payment we sent was successful.
+	/// A sent payment was successful.
 	PaymentSuccessful {
 		/// The hash of the payment.
 		payment_hash: PaymentHash,
 	},
-	/// A payment we sent has failed.
+	/// A sent payment has failed.
 	PaymentFailed {
 		/// The hash of the payment.
 		payment_hash: PaymentHash,
@@ -44,28 +44,23 @@ pub enum Event {
 	PaymentReceived {
 		/// The hash of the payment.
 		payment_hash: PaymentHash,
-		/// The value, in thousandths of a satoshi that has been received.
+		/// The value, in thousandths of a satoshi, that has been received.
 		amount_msat: u64,
 	},
 	/// A channel is ready to be used.
 	ChannelReady {
-		/// The channel_id of the channel which is ready.
+		/// The `channel_id` of the channel.
 		channel_id: [u8; 32],
-		/// The user_channel_id of the channel which is ready.
+		/// The `user_channel_id` of the channel.
 		user_channel_id: u128,
 	},
 	/// A channel has been closed.
 	ChannelClosed {
-		/// The channel_id of the channel which has been closed.
+		/// The `channel_id` of the channel.
 		channel_id: [u8; 32],
-		/// The user_channel_id of the channel which has been closed.
+		/// The `user_channel_id` of the channel.
 		user_channel_id: u128,
 	},
-	// TODO: Implement on-chain events when better integrating with BDK wallet sync.
-	//OnChainPaymentSent {
-	//},
-	//OnChainPaymentReceived {
-	//}
 }
 
 // TODO: Figure out serialization more concretely - see issue #30
@@ -97,12 +92,6 @@ impl Readable for Event {
 				let user_channel_id: u128 = Readable::read(reader)?;
 				Ok(Self::ChannelClosed { channel_id, user_channel_id })
 			}
-			//5u8 => {
-			// TODO OnChainPaymentSent
-			//}
-			//6u8 => {
-			// TODO OnChainPaymentReceived
-			//}
 			_ => Err(lightning::ln::msgs::DecodeError::InvalidValue),
 		}
 	}
@@ -138,12 +127,7 @@ impl Writeable for Event {
 				channel_id.write(writer)?;
 				user_channel_id.write(writer)?;
 				Ok(())
-			} //Self::OnChainPaymentSent { .. } => {
-			  //TODO
-			  //}
-			  //Self::OnChainPaymentReceived { .. } => {
-			  //TODO
-			  //}
+			}
 		}
 	}
 }
@@ -310,7 +294,7 @@ where
 				output_script,
 				..
 			} => {
-				// Construct the raw transaction with one output, that is paid the amount of the
+				// Construct the raw transaction with the output that is paid the amount of the
 				// channel.
 				let confirmation_target = ConfirmationTarget::Normal;
 
@@ -356,7 +340,7 @@ where
 			} => {
 				log_info!(
 					self.logger,
-					"Received payment from payment hash {} of {} millisatoshis",
+					"Received payment from payment hash {} of {} msats",
 					hex_utils::to_string(&payment_hash.0),
 					amount_msat,
 				);
@@ -391,7 +375,7 @@ where
 			} => {
 				log_info!(
 					self.logger,
-					"Claimed payment from payment hash {} of {} millisatoshis.",
+					"Claimed payment from payment hash {} of {} msats.",
 					hex_utils::to_string(&payment_hash.0),
 					amount_msat,
 				);
@@ -430,17 +414,18 @@ where
 						payment.status = PaymentStatus::Succeeded;
 						log_info!(
 							self.logger,
-							"Successfully sent payment of {} millisatoshis{} from \
+							"Successfully sent payment of {} msats{} from \
 								 payment hash {:?} with preimage {:?}",
 							payment.amount_msat.unwrap(),
 							if let Some(fee) = fee_paid_msat {
-								format!(" (fee {} msat)", fee)
+								format!(" (fee {} msats)", fee)
 							} else {
 								"".to_string()
 							},
 							hex_utils::to_string(&payment_hash.0),
 							hex_utils::to_string(&payment_preimage.0)
 						);
+						break;
 					}
 				}
 				self.event_queue
@@ -450,7 +435,7 @@ where
 			LdkEvent::PaymentFailed { payment_hash, .. } => {
 				log_info!(
 					self.logger,
-					"Failed to send payment to payment hash {:?}: exhausted payment retry attempts",
+					"Failed to send payment to payment hash {:?}.",
 					hex_utils::to_string(&payment_hash.0)
 				);
 
@@ -515,23 +500,19 @@ where
 				let nodes = read_only_network_graph.nodes();
 				let channels = self.channel_manager.list_channels();
 
-				let node_str = |channel_id: &Option<[u8; 32]>| match channel_id {
-					None => String::new(),
-					Some(channel_id) => match channels.iter().find(|c| c.channel_id == *channel_id)
-					{
-						None => String::new(),
-						Some(channel) => {
-							match nodes.get(&NodeId::from_pubkey(&channel.counterparty.node_id)) {
-								None => "private node".to_string(),
-								Some(node) => match &node.announcement_info {
-									None => "unnamed node".to_string(),
-									Some(announcement) => {
-										format!("node {}", announcement.alias)
-									}
-								},
-							}
-						}
-					},
+				let node_str = |channel_id: &Option<[u8; 32]>| {
+					channel_id
+						.and_then(|channel_id| channels.iter().find(|c| c.channel_id == channel_id))
+						.and_then(|channel| {
+							nodes.get(&NodeId::from_pubkey(&channel.counterparty.node_id))
+						})
+						.map_or("private_node".to_string(), |node| {
+							node.announcement_info
+								.as_ref()
+								.map_or("unnamed node".to_string(), |ann| {
+									format!("node {}", ann.alias)
+								})
+						})
 				};
 				let channel_str = |channel_id: &Option<[u8; 32]>| {
 					channel_id
@@ -548,27 +529,22 @@ where
 				let to_next_str =
 					format!(" to {}{}", node_str(&next_channel_id), channel_str(&next_channel_id));
 
-				let from_onchain_str = if claim_from_onchain_tx {
-					"from onchain downstream claim"
-				} else {
-					"from HTLC fulfill message"
-				};
-				if let Some(fee_earned) = fee_earned_msat {
+				let fee_earned = fee_earned_msat.unwrap_or(0);
+				if claim_from_onchain_tx {
 					log_info!(
 						self.logger,
-						"Forwarded payment{}{}, earning {} msat {}",
+						"Forwarded payment{}{}, earning {} msats in fees from claiming onchain.",
 						from_prev_str,
 						to_next_str,
 						fee_earned,
-						from_onchain_str
 					);
 				} else {
 					log_info!(
 						self.logger,
-						"Forwarded payment{}{}, claiming onchain {}",
+						"Forwarded payment{}{}, earning {} msats in fees.",
 						from_prev_str,
 						to_next_str,
-						from_onchain_str
+						fee_earned,
 					);
 				}
 			}
