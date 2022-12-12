@@ -142,9 +142,9 @@ fn channel_full_cycle() {
 	let node_b_addr =
 		format!("{}@{}", node_b.node_id().unwrap(), node_b.listening_address().unwrap());
 	node_a.connect_open_channel(&node_b_addr, 50000, true).unwrap();
-	// TODO: why are those needed?
-	node_a.sync_wallets().unwrap();
-	node_b.sync_wallets().unwrap();
+
+	// Wait a sec so the funding tx can 'propagate' via EsploraD to BitcoinD.
+	std::thread::sleep(Duration::from_secs(1));
 
 	println!("\n .. generating blocks, syncing wallets .. ");
 	generate_blocks_and_wait(6);
