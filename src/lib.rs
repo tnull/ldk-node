@@ -544,47 +544,51 @@ impl LdkLite {
 		std::thread::spawn(move || {
 			tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap().block_on(
 				async move {
-					let mut rounds = 0;
 					loop {
 						if stop_sync.load(Ordering::Acquire) {
 							return;
 						}
-						// As syncing the on-chain wallet is much more time-intesive, we only sync every
-						// fifth round.
-						if rounds == 0 {
-							let now = Instant::now();
-							match wallet.sync().await {
-								Ok(()) => log_info!(
-									sync_logger,
-									"On-chain wallet sync finished in {}ms.",
-									now.elapsed().as_millis()
-								),
-								Err(err) => {
-									log_error!(sync_logger, "On-chain wallet sync failed: {}", err)
-								}
-							}
-						}
-						rounds = (rounds + 1) % 5;
-
-						let confirmables = vec![
-							&*sync_cman as &(dyn Confirm + Sync + Send),
-							&*sync_cmon as &(dyn Confirm + Sync + Send),
-						];
 						let now = Instant::now();
-						match tx_sync.sync(confirmables).await {
+						match wallet.sync().await {
 							Ok(()) => log_info!(
 								sync_logger,
-								"Lightning wallet sync finished in {}ms.",
+								"On-chain wallet sync finished in {}ms.",
 								now.elapsed().as_millis()
 							),
-							Err(e) => {
-								log_error!(sync_logger, "Lightning wallet sync failed: {}", e)
+							Err(err) => {
+								log_error!(sync_logger, "On-chain wallet sync failed: {}", err)
 							}
 						}
-						tokio::time::sleep(Duration::from_secs(5)).await;
+						tokio::time::sleep(Duration::from_secs(20)).await;
 					}
 				},
 			);
+		});
+
+		let sync_logger = Arc::clone(&self.logger);
+		let stop_sync = Arc::clone(&stop_wallet_sync);
+		tokio_runtime.spawn(async move {
+			loop {
+				if stop_sync.load(Ordering::Acquire) {
+					return;
+				}
+				let now = Instant::now();
+				let confirmables = vec![
+					&*sync_cman as &(dyn Confirm + Sync + Send),
+					&*sync_cmon as &(dyn Confirm + Sync + Send),
+				];
+				match tx_sync.sync(confirmables).await {
+					Ok(()) => log_info!(
+						sync_logger,
+						"Lightning wallet sync finished in {}ms.",
+						now.elapsed().as_millis()
+					),
+					Err(e) => {
+						log_error!(sync_logger, "Lightning wallet sync failed: {}", e)
+					}
+				}
+				tokio::time::sleep(Duration::from_secs(5)).await;
+			}
 		});
 
 		let stop_networking = Arc::new(AtomicBool::new(false));
