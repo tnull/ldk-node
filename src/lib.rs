@@ -675,7 +675,7 @@ impl LdkLite {
 	/// Blocks until the next event is available.
 	///
 	/// Note: this will always return the same event until handling is confirmed via [`LdkLite::event_handled`].
-	pub fn next_event(&self) -> Arc<Event> {
+	pub fn next_event(&self) -> Event {
 		self.event_queue.next_event()
 	}
 

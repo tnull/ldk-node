@@ -153,7 +153,7 @@ fn channel_full_cycle() {
 
 	expect_event!(node_a, ChannelReady);
 
-	let channel_id = match *node_b.next_event() {
+	let channel_id = match node_b.next_event() {
 		ref e @ Event::ChannelReady { channel_id, .. } => {
 			println!("{} got event {:?}", std::stringify!(node_b), e);
 			node_b.event_handled();
