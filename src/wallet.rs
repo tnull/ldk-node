@@ -35,7 +35,7 @@ where
 	// A BDK blockchain used for wallet sync.
 	blockchain: EsploraBlockchain,
 	// A BDK on-chain wallet.
-	wallet: Mutex<bdk::Wallet<D>>,
+	inner: Mutex<bdk::Wallet<D>>,
 	// A cache storing the most recently retrieved fee rate estimations.
 	fee_rate_cache: Mutex<HashMap<ConfirmationTarget, FeeRate>>,
 	tokio_runtime: RwLock<Option<Arc<tokio::runtime::Runtime>>>,
@@ -49,15 +49,15 @@ where
 	pub(crate) fn new(
 		blockchain: EsploraBlockchain, wallet: bdk::Wallet<D>, logger: Arc<FilesystemLogger>,
 	) -> Self {
-		let wallet = Mutex::new(wallet);
+		let inner = Mutex::new(wallet);
 		let fee_rate_cache = Mutex::new(HashMap::new());
 		let tokio_runtime = RwLock::new(None);
-		Self { blockchain, wallet, fee_rate_cache, tokio_runtime, logger }
+		Self { blockchain, inner, fee_rate_cache, tokio_runtime, logger }
 	}
 
 	pub(crate) async fn sync(&self) -> Result<(), Error> {
 		let sync_options = SyncOptions { progress: None };
-		match self.wallet.lock().unwrap().sync(&self.blockchain, sync_options).await {
+		match self.inner.lock().unwrap().sync(&self.blockchain, sync_options).await {
 			Ok(()) => Ok(()),
 			Err(e) => {
 				log_error!(self.logger, "Wallet sync error: {}", e);
@@ -79,7 +79,7 @@ where
 	) -> Result<Transaction, Error> {
 		let fee_rate = self.estimate_fee_rate(confirmation_target);
 
-		let locked_wallet = self.wallet.lock().unwrap();
+		let locked_wallet = self.inner.lock().unwrap();
 		let mut tx_builder = locked_wallet.build_tx();
 
 		tx_builder.add_recipient(output_script.clone(), value_sats).fee_rate(fee_rate).enable_rbf();
@@ -112,13 +112,13 @@ where
 	}
 
 	pub(crate) fn get_new_address(&self) -> Result<bitcoin::Address, Error> {
-		let address_info = self.wallet.lock().unwrap().get_internal_address(AddressIndex::New)?;
+		let address_info = self.inner.lock().unwrap().get_internal_address(AddressIndex::New)?;
 		Ok(address_info.address)
 	}
 
 	#[cfg(any(test))]
 	pub(crate) fn get_balance(&self) -> Result<bdk::Balance, Error> {
-		Ok(self.wallet.lock().unwrap().get_balance()?)
+		Ok(self.inner.lock().unwrap().get_balance()?)
 	}
 
 	fn estimate_fee_rate(&self, confirmation_target: ConfirmationTarget) -> FeeRate {
