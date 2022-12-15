@@ -1,12 +1,11 @@
 use crate::{
-	hex_utils, ChannelManager, Config, Error, NetworkGraph, PaymentInfo, PaymentInfoStorage,
-	PaymentStatus, Wallet,
+	hex_utils, ChannelManager, Config, Error, KeysManager, NetworkGraph, PaymentInfo,
+	PaymentInfoStorage, PaymentStatus, Wallet,
 };
 
 use crate::logger::{log_error, log_given_level, log_info, log_internal, Logger};
 
 use lightning::chain::chaininterface::{BroadcasterInterface, ConfirmationTarget, FeeEstimator};
-use lightning::chain::keysinterface::KeysManager;
 use lightning::ln::PaymentHash;
 use lightning::routing::gossip::NodeId;
 use lightning::util::events::Event as LdkEvent;
