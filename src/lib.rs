@@ -38,19 +38,16 @@ pub use error::Error;
 pub use event::Event;
 use event::{EventHandler, EventQueue};
 use peer_store::{PeerInfo, PeerInfoStorage};
-use wallet::Wallet;
+use wallet::{Wallet, WalletKeysManager};
 
 use logger::{log_error, log_given_level, log_info, log_internal, FilesystemLogger, Logger};
 
-use lightning::chain::keysinterface::{InMemorySigner, KeysInterface, KeysManager, Recipient};
+use lightning::chain::keysinterface::{InMemorySigner, KeysInterface, Recipient};
 use lightning::chain::{chainmonitor, Access, BestBlock, Confirm, Watch};
 use lightning::ln::channelmanager;
-use lightning::ln::channelmanager::{
-	ChainParameters, ChannelManagerReadArgs, SimpleArcChannelManager,
-};
-use lightning::ln::peer_handler::{IgnoringMessageHandler, MessageHandler, SimpleArcPeerManager};
+use lightning::ln::channelmanager::{ChainParameters, ChannelManagerReadArgs};
+use lightning::ln::peer_handler::{IgnoringMessageHandler, MessageHandler};
 use lightning::ln::{PaymentHash, PaymentPreimage, PaymentSecret};
-use lightning::onion_message::SimpleArcOnionMessenger;
 use lightning::routing::gossip;
 use lightning::routing::gossip::P2PGossipSync;
 use lightning::routing::scoring::ProbabilisticScorer;
@@ -262,8 +259,12 @@ impl Builder {
 		let cur_time = SystemTime::now()
 			.duration_since(SystemTime::UNIX_EPOCH)
 			.expect("System time error: Clock may have gone backwards");
-		let keys_manager =
-			Arc::new(KeysManager::new(&seed, cur_time.as_secs(), cur_time.subsec_nanos()));
+		let keys_manager = Arc::new(KeysManager::new(
+			&seed,
+			cur_time.as_secs(),
+			cur_time.subsec_nanos(),
+			Arc::clone(&wallet),
+		));
 
 		// Step 6: Read ChannelMonitor state from disk
 		let mut channel_monitors = persister
@@ -701,6 +702,12 @@ impl LdkLite {
 		Ok(funding_address)
 	}
 
+	#[cfg(test)]
+	/// Retrieve the current on-chain balance.
+	pub fn on_chain_balance(&mut self) -> Result<bdk::Balance, Error> {
+		self.wallet.get_balance()
+	}
+
 	/// Connect to a node and open a new channel. Disconnects and re-connects are handled automatically
 	///
 	/// Returns a temporary channel id
@@ -1057,21 +1064,24 @@ type ChainMonitor = chainmonitor::ChainMonitor<
 	Arc<FilesystemPersister>,
 >;
 
-type PeerManager = SimpleArcPeerManager<
+pub(crate) type PeerManager = lightning::ln::peer_handler::PeerManager<
 	SocketDescriptor,
-	ChainMonitor,
-	Wallet<bdk::sled::Tree>,
-	Wallet<bdk::sled::Tree>,
-	dyn Access + Send + Sync,
-	FilesystemLogger,
+	Arc<ChannelManager>,
+	Arc<GossipSync>,
+	Arc<OnionMessenger>,
+	Arc<FilesystemLogger>,
+	IgnoringMessageHandler,
 >;
 
-pub(crate) type ChannelManager = SimpleArcChannelManager<
-	ChainMonitor,
-	Wallet<bdk::sled::Tree>,
-	Wallet<bdk::sled::Tree>,
-	FilesystemLogger,
+pub(crate) type ChannelManager = lightning::ln::channelmanager::ChannelManager<
+	Arc<ChainMonitor>,
+	Arc<Wallet<bdk::sled::Tree>>,
+	Arc<WalletKeysManager<bdk::sled::Tree>>,
+	Arc<Wallet<bdk::sled::Tree>>,
+	Arc<FilesystemLogger>,
 >;
+
+pub(crate) type KeysManager = WalletKeysManager<bdk::sled::Tree>;
 
 type InvoicePayer<F> = payment::InvoicePayer<Arc<ChannelManager>, Router, Arc<FilesystemLogger>, F>;
 
@@ -1085,4 +1095,8 @@ pub(crate) type NetworkGraph = gossip::NetworkGraph<Arc<FilesystemLogger>>;
 
 pub(crate) type PaymentInfoStorage = Mutex<HashMap<PaymentHash, PaymentInfo>>;
 
-pub(crate) type OnionMessenger = SimpleArcOnionMessenger<FilesystemLogger>;
+pub(crate) type OnionMessenger = lightning::onion_message::OnionMessenger<
+	Arc<WalletKeysManager<bdk::sled::Tree>>,
+	Arc<FilesystemLogger>,
+	IgnoringMessageHandler,
+>;
