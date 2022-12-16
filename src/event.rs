@@ -8,6 +8,7 @@ use crate::logger::{log_error, log_given_level, log_info, log_internal, Logger};
 use lightning::chain::chaininterface::{BroadcasterInterface, ConfirmationTarget, FeeEstimator};
 use lightning::ln::PaymentHash;
 use lightning::routing::gossip::NodeId;
+use lightning::util::errors::APIError;
 use lightning::util::events::Event as LdkEvent;
 use lightning::util::events::EventHandler as LdkEventHandler;
 use lightning::util::events::PaymentPurpose;
@@ -305,16 +306,30 @@ where
 				) {
 					Ok(final_tx) => {
 						// Give the funding transaction back to LDK for opening the channel.
-						if self
-							.channel_manager
-							.funding_transaction_generated(
-								&temporary_channel_id,
-								&counterparty_node_id,
-								final_tx,
-							)
-							.is_err()
-						{
-							log_error!(self.logger, "Channel went away before we could fund it. The peer disconnected or refused the channel");
+						match self.channel_manager.funding_transaction_generated(
+							&temporary_channel_id,
+							&counterparty_node_id,
+							final_tx,
+						) {
+							Ok(()) => {}
+							Err(APIError::APIMisuseError { err }) => {
+								log_error!(self.logger, "Panicking due to APIMisuseError: {}", err);
+								panic!("APIMisuseError: {}", err);
+							}
+							Err(APIError::ChannelUnavailable { err }) => {
+								log_error!(
+									self.logger,
+									"Failed to process funding transaction as channel went away before we could fund it: {}",
+									err
+								)
+							}
+							Err(err) => {
+								log_error!(
+									self.logger,
+									"Failed to process funding transaction: {:?}",
+									err
+								)
+							}
 						}
 					}
 					Err(_err) => {
