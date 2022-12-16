@@ -708,6 +708,11 @@ impl LdkLite {
 		self.wallet.get_balance()
 	}
 
+	#[cfg(test)]
+	pub fn force_close_all_channels(&mut self) {
+		self.channel_manager.force_close_all_channels_broadcasting_latest_txn();
+	}
+
 	/// Connect to a node and open a new channel. Disconnects and re-connects are handled automatically
 	///
 	/// Returns a temporary channel id

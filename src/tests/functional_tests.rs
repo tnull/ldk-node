@@ -180,13 +180,16 @@ fn channel_full_cycle() {
 	expect_event!(node_a, PaymentSuccessful);
 	expect_event!(node_b, PaymentReceived);
 
-	node_b.close_channel(&channel_id, &node_a.node_id().unwrap()).unwrap();
+	//node_b.close_channel(&channel_id, &node_a.node_id().unwrap()).unwrap();
+	node_b.force_close_all_channels();
 	generate_blocks_and_wait(1);
 
 	expect_event!(node_a, ChannelClosed);
 	expect_event!(node_b, ChannelClosed);
 
 	node_a.sync_wallets().unwrap();
+	println!("A: {:?}", node_a.on_chain_balance().unwrap());
+	println!("B: {:?}", node_b.on_chain_balance().unwrap());
 	assert!(node_a.on_chain_balance().unwrap().get_spendable() > 90000);
 	assert_eq!(node_b.on_chain_balance().unwrap().get_spendable(), 100000);
 
