@@ -137,8 +137,8 @@ fn channel_full_cycle() {
 	premine_and_distribute_funds(vec![addr_a, addr_b], Amount::from_sat(100000));
 	node_a.sync_wallets().unwrap();
 	node_b.sync_wallets().unwrap();
-	assert_eq!(node_a.on_chain_balance().unwrap().confirmed, 100000);
-	assert_eq!(node_b.on_chain_balance().unwrap().confirmed, 100000);
+	assert_eq!(node_a.on_chain_balance().unwrap().get_spendable(), 100000);
+	assert_eq!(node_b.on_chain_balance().unwrap().get_spendable(), 100000);
 
 	println!("\nA -- connect_open_channel -> B");
 	let node_b_addr =
@@ -154,9 +154,9 @@ fn channel_full_cycle() {
 	node_b.sync_wallets().unwrap();
 
 	let node_a_balance = node_a.on_chain_balance().unwrap();
-	assert!(node_a_balance.confirmed < 50000);
-	assert!(node_a_balance.confirmed > 40000);
-	assert_eq!(node_b.on_chain_balance().unwrap().confirmed, 100000);
+	assert!(node_a_balance.get_spendable() < 50000);
+	assert!(node_a_balance.get_spendable() > 40000);
+	assert_eq!(node_b.on_chain_balance().unwrap().get_spendable(), 100000);
 
 	expect_event!(node_a, ChannelReady);
 
@@ -186,12 +186,9 @@ fn channel_full_cycle() {
 	expect_event!(node_a, ChannelClosed);
 	expect_event!(node_b, ChannelClosed);
 
-	// TODO: Not entirely sure why we need *another* confirmation before the funds show up as
-	// confirmed. Is this expected or a BDK bug?
-	generate_blocks_and_wait(1);
 	node_a.sync_wallets().unwrap();
-	assert!(node_a.on_chain_balance().unwrap().confirmed > 90000);
-	assert_eq!(node_b.on_chain_balance().unwrap().confirmed, 100000);
+	assert!(node_a.on_chain_balance().unwrap().get_spendable() > 90000);
+	assert_eq!(node_b.on_chain_balance().unwrap().get_spendable(), 100000);
 
 	node_a.stop().unwrap();
 	println!("\nA stopped");
