@@ -42,7 +42,7 @@ impl<K: KVStorePersister> PeerInfoStorage<K> {
 			.persist(PEER_INFO_PERSISTENCE_KEY, &*locked_peers)
 			.map_err(|_| Error::PersistenceFailed)?;
 
-		return Ok(());
+		Ok(())
 	}
 
 	pub(crate) fn remove_peer(&self, peer_pubkey: &PublicKey) -> Result<(), Error> {
@@ -54,7 +54,7 @@ impl<K: KVStorePersister> PeerInfoStorage<K> {
 			.persist(PEER_INFO_PERSISTENCE_KEY, &*locked_peers)
 			.map_err(|_| Error::PersistenceFailed)?;
 
-		return Ok(());
+		Ok(())
 	}
 
 	pub(crate) fn peers(&self) -> Vec<PeerInfo> {
@@ -155,7 +155,7 @@ impl TryFrom<String> for PeerInfo {
 	type Error = Error;
 
 	fn try_from(peer_pubkey_and_ip_addr: String) -> Result<Self, Self::Error> {
-		let mut pubkey_and_addr = peer_pubkey_and_ip_addr.split("@");
+		let mut pubkey_and_addr = peer_pubkey_and_ip_addr.split('@');
 		let pubkey = pubkey_and_addr.next();
 		let peer_addr_str = pubkey_and_addr.next();
 		if pubkey.is_none() || peer_addr_str.is_none() {

@@ -30,6 +30,8 @@ mod hex_utils;
 mod io_utils;
 mod logger;
 mod peer_store;
+#[cfg(test)]
+mod tests;
 mod types;
 mod wallet;
 
@@ -206,19 +208,18 @@ impl Builder {
 			.expect("Failed to read wallet master key");
 
 		let wallet_name = bdk::wallet::wallet_name_from_descriptor(
-			Bip84(xprv.clone(), bdk::KeychainKind::External),
-			Some(Bip84(xprv.clone(), bdk::KeychainKind::Internal)),
+			Bip84(xprv, bdk::KeychainKind::External),
+			Some(Bip84(xprv, bdk::KeychainKind::Internal)),
 			config.network,
 			&Secp256k1::new(),
 		)
 		.expect("Failed to derive on-chain wallet name");
 		let database = sled::open(bdk_data_dir).expect("Failed to open BDK database");
-		let database =
-			database.open_tree(wallet_name.clone()).expect("Failed to open BDK database");
+		let database = database.open_tree(wallet_name).expect("Failed to open BDK database");
 
 		let bdk_wallet = bdk::Wallet::new(
-			Bip84(xprv.clone(), bdk::KeychainKind::External),
-			Some(Bip84(xprv.clone(), bdk::KeychainKind::Internal)),
+			Bip84(xprv, bdk::KeychainKind::External),
+			Some(Bip84(xprv, bdk::KeychainKind::Internal)),
 			config.network,
 			database,
 		)
@@ -285,7 +286,7 @@ impl Builder {
 		let mut user_config = UserConfig::default();
 		user_config.channel_handshake_limits.force_announced_channel_preference = false;
 		let channel_manager = {
-			if let Ok(mut f) = fs::File::open(format!("{}/manager", ldk_data_dir.clone())) {
+			if let Ok(mut f) = fs::File::open(format!("{}/manager", ldk_data_dir)) {
 				let mut channel_monitor_mut_references = Vec::new();
 				for (_, channel_monitor) in channel_monitors.iter_mut() {
 					channel_monitor_mut_references.push(channel_monitor);
@@ -316,7 +317,7 @@ impl Builder {
 					network: config.network,
 					best_block: BestBlock::new(dummy_block_hash, 0),
 				};
-				let fresh_channel_manager = channelmanager::ChannelManager::new(
+				channelmanager::ChannelManager::new(
 					Arc::clone(&wallet),
 					Arc::clone(&chain_monitor),
 					Arc::clone(&wallet),
@@ -327,8 +328,7 @@ impl Builder {
 					Arc::clone(&keys_manager),
 					user_config,
 					chain_params,
-				);
-				fresh_channel_manager
+				)
 			}
 		};
 
@@ -380,7 +380,7 @@ impl Builder {
 
 		// Step 14: Restore event handler from disk or create a new one.
 		let event_queue = if let Ok(mut f) =
-			fs::File::open(format!("{}/{}", ldk_data_dir.clone(), event::EVENTS_PERSISTENCE_KEY))
+			fs::File::open(format!("{}/{}", ldk_data_dir, event::EVENTS_PERSISTENCE_KEY))
 		{
 			Arc::new(
 				EventQueue::read(&mut f, Arc::clone(&persister))
@@ -390,11 +390,9 @@ impl Builder {
 			Arc::new(EventQueue::new(Arc::clone(&persister)))
 		};
 
-		let peer_store = if let Ok(mut f) = fs::File::open(format!(
-			"{}/{}",
-			ldk_data_dir.clone(),
-			peer_store::PEER_INFO_PERSISTENCE_KEY
-		)) {
+		let peer_store = if let Ok(mut f) =
+			fs::File::open(format!("{}/{}", ldk_data_dir, peer_store::PEER_INFO_PERSISTENCE_KEY))
+		{
 			Arc::new(
 				PeerInfoStorage::read(&mut f, Arc::clone(&persister))
 					.expect("Failed to read peer information from disk."),
@@ -643,7 +641,7 @@ impl Node {
 						if peer_info.pubkey == node_id {
 							let _ = do_connect_peer(
 								peer_info.pubkey,
-								peer_info.address.clone(),
+								peer_info.address,
 								Arc::clone(&connect_pm),
 								Arc::clone(&connect_logger),
 							)
@@ -859,8 +857,8 @@ impl Node {
 			}
 		};
 
-		let payment_hash = PaymentHash(invoice.payment_hash().clone().into_inner());
-		let payment_secret = Some(invoice.payment_secret().clone());
+		let payment_hash = PaymentHash((*invoice.payment_hash()).into_inner());
+		let payment_secret = Some(*invoice.payment_secret());
 
 		let mut outbound_payments_lock = self.outbound_payments.lock().unwrap();
 		outbound_payments_lock.insert(
@@ -957,12 +955,12 @@ impl Node {
 			}
 		};
 
-		let payment_hash = PaymentHash(invoice.payment_hash().clone().into_inner());
+		let payment_hash = PaymentHash((*invoice.payment_hash()).into_inner());
 		inbound_payments_lock.insert(
 			payment_hash,
 			PaymentInfo {
 				preimage: None,
-				secret: Some(invoice.payment_secret().clone()),
+				secret: Some(*invoice.payment_secret()),
 				status: PaymentStatus::Pending,
 				amount_msat,
 			},
@@ -970,7 +968,7 @@ impl Node {
 		Ok(invoice)
 	}
 
-	///	Query for information about the status of a specific payment.
+	/// Query for information about the status of a specific payment.
 	pub fn payment_info(&self, payment_hash: &[u8; 32]) -> Option<PaymentInfo> {
 		let payment_hash = PaymentHash(*payment_hash);
 

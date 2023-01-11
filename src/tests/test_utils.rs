@@ -5,6 +5,22 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 
+macro_rules! expect_event {
+	($node: expr, $event_type: ident) => {{
+		match $node.next_event() {
+			ref e @ Event::$event_type { .. } => {
+				println!("{} got event {:?}", std::stringify!($node), e);
+				$node.event_handled();
+			}
+			ref e => {
+				panic!("{} got unexpected event!: {:?}", std::stringify!($node), e);
+			}
+		}
+	}};
+}
+
+pub(crate) use expect_event;
+
 pub(crate) struct TestPersister {
 	persisted_bytes: Mutex<HashMap<String, Vec<u8>>>,
 	did_persist: AtomicBool,
