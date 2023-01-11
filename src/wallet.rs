@@ -12,7 +12,7 @@ use lightning::chain::keysinterface::{
 	EntropySource, InMemorySigner, KeyMaterial, KeysManager, NodeSigner, Recipient, SignerProvider,
 	SpendableOutputDescriptor,
 };
-use lightning::ln::msgs::DecodeError;
+use lightning::ln::msgs::{DecodeError, UnsignedGossipMessage};
 use lightning::ln::script::ShutdownScript;
 
 use bdk::blockchain::{Blockchain, EsploraBlockchain};
@@ -22,8 +22,8 @@ use bdk::{FeeRate, SignOptions, SyncOptions};
 
 use bitcoin::bech32::u5;
 use bitcoin::secp256k1::ecdh::SharedSecret;
-use bitcoin::secp256k1::ecdsa::RecoverableSignature;
-use bitcoin::secp256k1::{PublicKey, Scalar, Secp256k1, SecretKey, Signing};
+use bitcoin::secp256k1::ecdsa::{RecoverableSignature, Signature};
+use bitcoin::secp256k1::{PublicKey, Scalar, Secp256k1, Signing};
 use bitcoin::{Script, Transaction, TxOut};
 
 use std::collections::HashMap;
@@ -105,7 +105,8 @@ where
 					locked_fee_rate_cache.insert(target, rate);
 					log_trace!(
 						self.logger,
-						"Fee rate estimation updated: {} sats/kwu",
+						"Fee rate estimation updated for {:?}: {} sats/kwu",
+						target,
 						rate.fee_wu(1000)
 					);
 				}
@@ -139,12 +140,20 @@ where
 			}
 			Err(err) => {
 				log_error!(self.logger, "Failed to create funding transaction: {}", err);
-				Err(err)?
+				return Err(err.into());
 			}
 		};
 
-		if !locked_wallet.sign(&mut psbt, SignOptions::default())? {
-			return Err(Error::FundingTxCreationFailed);
+		match locked_wallet.sign(&mut psbt, SignOptions::default()) {
+			Ok(finalized) => {
+				if !finalized {
+					return Err(Error::FundingTxCreationFailed);
+				}
+			}
+			Err(err) => {
+				log_error!(self.logger, "Failed to create funding transaction: {}", err);
+				return Err(err.into());
+			}
 		}
 
 		Ok(psbt.extract_tx())
@@ -194,7 +203,6 @@ where
 		let locked_runtime = self.tokio_runtime.read().unwrap();
 		if locked_runtime.as_ref().is_none() {
 			log_error!(self.logger, "Failed to broadcast transaction: No runtime.");
-			unreachable!("Failed to broadcast transaction: No runtime.");
 		}
 
 		let res = tokio::task::block_in_place(move || {
@@ -263,10 +271,6 @@ impl<D> NodeSigner for WalletKeysManager<D>
 where
 	D: BatchDatabase,
 {
-	fn get_node_secret(&self, recipient: Recipient) -> Result<SecretKey, ()> {
-		self.inner.get_node_secret(recipient)
-	}
-
 	fn get_node_id(&self, recipient: Recipient) -> Result<PublicKey, ()> {
 		self.inner.get_node_id(recipient)
 	}
@@ -285,6 +289,10 @@ where
 		&self, hrp_bytes: &[u8], invoice_data: &[u5], recipient: Recipient,
 	) -> Result<RecoverableSignature, ()> {
 		self.inner.sign_invoice(hrp_bytes, invoice_data, recipient)
+	}
+
+	fn sign_gossip_message(&self, msg: UnsignedGossipMessage<'_>) -> Result<Signature, ()> {
+		self.inner.sign_gossip_message(msg)
 	}
 }
 

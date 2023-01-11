@@ -25,9 +25,9 @@ use std::time::Duration;
 /// The event queue will be persisted under this key.
 pub(crate) const EVENTS_PERSISTENCE_KEY: &str = "events";
 
-/// An event emitted by [`LdkLite`], which should be handled by the user.
+/// An event emitted by [`Node`], which should be handled by the user.
 ///
-/// [`LdkLite`]: [`crate::LdkLite`]
+/// [`Node`]: [`crate::Node`]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Event {
 	/// A sent payment was successful.
@@ -324,7 +324,8 @@ where
 							}
 						}
 					}
-					Err(_err) => {
+					Err(err) => {
+						log_error!(self.logger, "Failed to create funding transaction: {}", err);
 						self.channel_manager
 							.force_close_without_broadcasting_txn(
 								&temporary_channel_id,
@@ -480,17 +481,19 @@ where
 				let output_descriptors = &outputs.iter().collect::<Vec<_>>();
 				let tx_feerate =
 					self.wallet.get_est_sat_per_1000_weight(ConfirmationTarget::Normal);
-				let spending_tx = self
-					.keys_manager
-					.spend_spendable_outputs(
-						output_descriptors,
-						Vec::new(),
-						destination_address.script_pubkey(),
-						tx_feerate,
-						&Secp256k1::new(),
-					)
-					.unwrap();
-				self.wallet.broadcast_transaction(&spending_tx);
+				let res = self.keys_manager.spend_spendable_outputs(
+					output_descriptors,
+					Vec::new(),
+					destination_address.script_pubkey(),
+					tx_feerate,
+					&Secp256k1::new(),
+				);
+				match res {
+					Ok(spending_tx) => self.wallet.broadcast_transaction(&spending_tx),
+					Err(err) => {
+						log_error!(self.logger, "Error spending outputs: {:?}", err);
+					}
+				}
 			}
 			LdkEvent::OpenChannelRequest { .. } => {}
 			LdkEvent::PaymentForwarded {
@@ -588,21 +591,29 @@ mod tests {
 
 	#[test]
 	fn event_queue_persistence() {
-		let test_persister = Arc::new(TestPersister::new());
-		let event_queue = EventQueue::new(Arc::clone(&test_persister));
+		let persister = Arc::new(TestPersister::new());
+		let event_queue = EventQueue::new(Arc::clone(&persister));
 
 		let expected_event = Event::ChannelReady { channel_id: [23u8; 32], user_channel_id: 2323 };
 		event_queue.add_event(expected_event.clone()).unwrap();
-		assert!(test_persister.get_and_clear_pending_persist());
+		assert!(persister.get_and_clear_did_persist());
 
 		// Check we get the expected event and that it is returned until we mark it handled.
 		for _ in 0..5 {
 			assert_eq!(event_queue.next_event(), expected_event);
-			assert_eq!(false, test_persister.get_and_clear_pending_persist());
+			assert_eq!(false, persister.get_and_clear_did_persist());
 		}
+
+		// Check we can read back what we persisted.
+		let persisted_bytes = persister.get_persisted_bytes(EVENTS_PERSISTENCE_KEY).unwrap();
+		let deser_event_queue =
+			EventQueue::read(&mut &persisted_bytes[..], Arc::clone(&persister)).unwrap();
+		assert_eq!(deser_event_queue.next_event(), expected_event);
+		assert!(!persister.get_and_clear_did_persist());
 
 		// Check we persisted on `event_handled()`
 		event_queue.event_handled().unwrap();
-		assert!(test_persister.get_and_clear_pending_persist());
+
+		assert!(persister.get_and_clear_did_persist());
 	}
 }
