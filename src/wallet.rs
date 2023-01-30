@@ -164,7 +164,6 @@ where
 		Ok(address_info.address)
 	}
 
-	#[cfg(any(test))]
 	pub(crate) fn get_balance(&self) -> Result<bdk::Balance, Error> {
 		Ok(self.inner.lock().unwrap().get_balance()?)
 	}

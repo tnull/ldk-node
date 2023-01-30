@@ -42,7 +42,7 @@ pub(crate) fn read_network_graph(
 	}
 
 	let genesis_hash =
-		bitcoin::blockdata::constants::genesis_block(config.network).header.block_hash();
+		bitcoin::blockdata::constants::genesis_block(config.network.0).header.block_hash();
 	Ok(NetworkGraph::new(genesis_hash, logger))
 }
 

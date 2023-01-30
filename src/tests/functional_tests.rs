@@ -124,21 +124,21 @@ fn rand_config() -> Config {
 fn channel_full_cycle() {
 	println!("== Node A ==");
 	let config_a = rand_config();
-	let mut node_a = Builder::from_config(config_a).build();
+	let node_a = Builder::from_config(config_a).build();
 	node_a.start().unwrap();
 	let addr_a = node_a.new_funding_address().unwrap();
 
 	println!("\n== Node B ==");
 	let config_b = rand_config();
-	let mut node_b = Builder::from_config(config_b).build();
+	let node_b = Builder::from_config(config_b).build();
 	node_b.start().unwrap();
 	let addr_b = node_b.new_funding_address().unwrap();
 
 	premine_and_distribute_funds(vec![addr_a, addr_b], Amount::from_sat(100000));
 	node_a.sync_wallets().unwrap();
 	node_b.sync_wallets().unwrap();
-	assert_eq!(node_a.on_chain_balance().unwrap().get_spendable(), 100000);
-	assert_eq!(node_b.on_chain_balance().unwrap().get_spendable(), 100000);
+	assert_eq!(node_a.onchain_balance().unwrap().get_spendable(), 100000);
+	assert_eq!(node_b.onchain_balance().unwrap().get_spendable(), 100000);
 
 	println!("\nA -- connect_open_channel -> B");
 	let node_b_addr =
@@ -153,18 +153,18 @@ fn channel_full_cycle() {
 	node_a.sync_wallets().unwrap();
 	node_b.sync_wallets().unwrap();
 
-	let node_a_balance = node_a.on_chain_balance().unwrap();
+	let node_a_balance = node_a.onchain_balance().unwrap();
 	assert!(node_a_balance.get_spendable() < 50000);
 	assert!(node_a_balance.get_spendable() > 40000);
-	assert_eq!(node_b.on_chain_balance().unwrap().get_spendable(), 100000);
+	assert_eq!(node_b.onchain_balance().unwrap().get_spendable(), 100000);
 
 	expect_event!(node_a, ChannelReady);
 
 	let channel_id = match node_b.next_event() {
-		ref e @ Event::ChannelReady { channel_id, .. } => {
+		ref e @ Event::ChannelReady { ref channel_id, .. } => {
 			println!("{} got event {:?}", std::stringify!(node_b), e);
 			node_b.event_handled();
-			channel_id
+			channel_id.clone()
 		}
 		ref e => {
 			panic!("{} got unexpected event!: {:?}", std::stringify!(node_b), e);
@@ -180,7 +180,7 @@ fn channel_full_cycle() {
 	expect_event!(node_a, PaymentSuccessful);
 	expect_event!(node_b, PaymentReceived);
 
-	node_b.close_channel(&channel_id, &node_a.node_id().unwrap()).unwrap();
+	node_b.close_channel(channel_id, &node_a.node_id().unwrap()).unwrap();
 	expect_event!(node_a, ChannelClosed);
 	expect_event!(node_b, ChannelClosed);
 
@@ -191,8 +191,8 @@ fn channel_full_cycle() {
 	node_a.sync_wallets().unwrap();
 	node_b.sync_wallets().unwrap();
 
-	assert!(node_a.on_chain_balance().unwrap().get_spendable() > 90000);
-	assert_eq!(node_b.on_chain_balance().unwrap().get_spendable(), 101000);
+	assert!(node_a.onchain_balance().unwrap().get_spendable() > 90000);
+	assert_eq!(node_b.onchain_balance().unwrap().get_spendable(), 101000);
 
 	node_a.stop().unwrap();
 	println!("\nA stopped");
