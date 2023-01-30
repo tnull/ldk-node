@@ -46,7 +46,7 @@ pub(crate) fn read_network_graph(config: &Config, logger: Arc<FilesystemLogger>)
 		}
 	}
 
-	NetworkGraph::new(config.network, logger)
+	NetworkGraph::new(config.network.0, logger)
 }
 
 pub(crate) fn read_scorer(

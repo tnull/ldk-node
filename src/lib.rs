@@ -17,7 +17,6 @@
 //! - Wallet and channel states are persisted to disk.
 //! - Gossip is retrieved over the P2P network.
 
-#![deny(missing_docs)]
 #![deny(broken_intra_doc_links)]
 #![deny(private_intra_doc_links)]
 #![allow(bare_trait_objects)]
@@ -40,16 +39,19 @@ pub use bitcoin;
 pub use lightning;
 pub use lightning_invoice;
 
-pub use error::Error;
+pub use error::Error as NodeError;
+use error::Error;
+
 pub use event::Event;
 use event::{EventHandler, EventQueue};
 use payment_store::PaymentInfoStorage;
 pub use payment_store::{PaymentDirection, PaymentInfo, PaymentStatus};
 use peer_store::{PeerInfo, PeerInfoStorage};
 use types::{
-	ChainMonitor, ChannelManager, GossipSync, KeysManager, NetworkGraph, OnionMessenger,
+	ChainMonitor, ChannelManager, GossipSync, KeysManager, Network, NetworkGraph, OnionMessenger,
 	PeerManager, Scorer,
 };
+pub use types::{ChannelId, UserChannelId};
 use wallet::Wallet;
 
 use logger::{log_error, log_info, FilesystemLogger, Logger};
@@ -61,7 +63,7 @@ use lightning::ln::channelmanager::{
 	ChainParameters, ChannelDetails, ChannelManagerReadArgs, PaymentId, Retry,
 };
 use lightning::ln::peer_handler::{IgnoringMessageHandler, MessageHandler};
-use lightning::ln::{PaymentHash, PaymentPreimage};
+use lightning::ln::{PaymentHash, PaymentPreimage, PaymentSecret};
 use lightning::routing::gossip::P2PGossipSync;
 use lightning::routing::utxo::UtxoLookup;
 
@@ -85,7 +87,7 @@ use bdk::template::Bip84;
 use bitcoin::hashes::sha256::Hash as Sha256;
 use bitcoin::hashes::Hash;
 use bitcoin::secp256k1::PublicKey;
-use bitcoin::BlockHash;
+use bitcoin::{Address, BlockHash};
 
 use rand::Rng;
 
@@ -93,9 +95,12 @@ use std::convert::{TryFrom, TryInto};
 use std::default::Default;
 use std::fs;
 use std::net::SocketAddr;
+use std::str::FromStr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant, SystemTime};
+
+uniffi::include_scaffolding!("ldk_node");
 
 // The 'stop gap' parameter used by BDK's wallet sync. This seems to configure the threshold
 // number of blocks after which BDK stops looking for scripts belonging to the wallet.
@@ -121,7 +126,7 @@ pub struct Config {
 	/// The URL of the utilized Esplora server.
 	pub esplora_server_url: String,
 	/// The used Bitcoin network.
-	pub network: bitcoin::Network,
+	pub network: Network,
 	/// The IP address and TCP port the node will listen on.
 	pub listening_address: Option<String>,
 	/// The default CLTV expiry delta to be used for payments.
@@ -133,7 +138,7 @@ impl Default for Config {
 		Self {
 			storage_dir_path: "/tmp/ldk_node/".to_string(),
 			esplora_server_url: "http://localhost:3002".to_string(),
-			network: bitcoin::Network::Regtest,
+			network: Network::default(),
 			listening_address: Some("0.0.0.0:9735".to_string()),
 			default_cltv_expiry_delta: 144,
 		}
@@ -203,16 +208,9 @@ impl Builder {
 	///
 	/// Options: `mainnet`/`bitcoin`, `testnet`, `regtest`, `signet`
 	///
-	/// Default: `testnet`
+	/// Default: `regtest`
 	pub fn set_network(&mut self, network: &str) -> &mut Self {
-		self.config.network = match network {
-			"mainnet" => bitcoin::Network::Bitcoin,
-			"bitcoin" => bitcoin::Network::Bitcoin,
-			"testnet" => bitcoin::Network::Testnet,
-			"regtest" => bitcoin::Network::Regtest,
-			"signet" => bitcoin::Network::Signet,
-			_ => bitcoin::Network::Regtest,
-		};
+		self.config.network = Network::from_str(network).unwrap_or(Network::default());
 		self
 	}
 
@@ -225,8 +223,8 @@ impl Builder {
 		self
 	}
 
-	/// Builds an [`Node`] instance according to the options previously configured.
-	pub fn build(&self) -> Node {
+	/// Builds a [`Node`] instance according to the options previously configured.
+	pub fn build(&self) -> Arc<Node> {
 		let config = Arc::new(self.config.clone());
 
 		let ldk_data_dir = format!("{}/ldk", config.storage_dir_path);
@@ -254,13 +252,13 @@ impl Builder {
 			io_utils::read_or_generate_seed_file(&seed_path)
 		};
 
-		let xprv = bitcoin::util::bip32::ExtendedPrivKey::new_master(config.network, &seed_bytes)
+		let xprv = bitcoin::util::bip32::ExtendedPrivKey::new_master(config.network.0, &seed_bytes)
 			.expect("Failed to read wallet master key");
 
 		let wallet_name = bdk::wallet::wallet_name_from_descriptor(
 			Bip84(xprv, bdk::KeychainKind::External),
 			Some(Bip84(xprv, bdk::KeychainKind::Internal)),
-			config.network,
+			config.network.0,
 			&Secp256k1::new(),
 		)
 		.expect("Failed to derive on-chain wallet name");
@@ -271,7 +269,7 @@ impl Builder {
 		let bdk_wallet = bdk::Wallet::new(
 			Bip84(xprv, bdk::KeychainKind::External),
 			Some(Bip84(xprv, bdk::KeychainKind::Internal)),
-			config.network,
+			config.network.0,
 			database,
 		)
 		.expect("Failed to setup on-chain wallet");
@@ -358,12 +356,10 @@ impl Builder {
 			} else {
 				// We're starting a fresh node.
 				let genesis_block_hash =
-					bitcoin::blockdata::constants::genesis_block(config.network)
-						.header
-						.block_hash();
+					bitcoin::blockdata::constants::genesis_block(config.network.0).block_hash();
 
 				let chain_params = ChainParameters {
-					network: config.network,
+					network: config.network.0,
 					best_block: BestBlock::new(genesis_block_hash, 0),
 				};
 				channelmanager::ChannelManager::new(
@@ -452,7 +448,7 @@ impl Builder {
 
 		let running = RwLock::new(None);
 
-		Node {
+		Arc::new(Node {
 			running,
 			config,
 			wallet,
@@ -469,7 +465,7 @@ impl Builder {
 			scorer,
 			peer_store,
 			payment_store,
-		}
+		})
 	}
 }
 
@@ -735,15 +731,25 @@ impl Node {
 	}
 
 	/// Retrieve a new on-chain/funding address.
-	pub fn new_funding_address(&self) -> Result<bitcoin::Address, Error> {
+	pub fn new_funding_address(&self) -> Result<Address, Error> {
 		let funding_address = self.wallet.get_new_address()?;
 		log_info!(self.logger, "Generated new funding address: {}", funding_address);
 		Ok(funding_address)
 	}
 
 	/// Retrieve the current on-chain balance.
-	pub fn on_chain_balance(&self) -> Result<bdk::Balance, Error> {
+	pub fn onchain_balance(&self) -> Result<bdk::Balance, Error> {
 		self.wallet.get_balance()
+	}
+
+	/// Retrieve the currently spendable on-chain balance in satoshis.
+	pub fn spendable_onchain_balance_sats(&self) -> Result<u64, Error> {
+		Ok(self.wallet.get_balance().map(|bal| bal.get_spendable())?)
+	}
+
+	/// Retrieve the current total on-chain balance in satoshis.
+	pub fn total_onchain_balance_sats(&self) -> Result<u64, Error> {
+		Ok(self.wallet.get_balance().map(|bal| bal.get_total())?)
 	}
 
 	/// Retrieve a list of known channels.
@@ -897,10 +903,10 @@ impl Node {
 
 	/// Close a previously opened channel.
 	pub fn close_channel(
-		&self, channel_id: &[u8; 32], counterparty_node_id: &PublicKey,
+		&self, channel_id: ChannelId, counterparty_node_id: &PublicKey,
 	) -> Result<(), Error> {
 		self.peer_store.remove_peer(counterparty_node_id)?;
-		match self.channel_manager.close_channel(channel_id, counterparty_node_id) {
+		match self.channel_manager.close_channel(&channel_id.0, counterparty_node_id) {
 			Ok(_) => Ok(()),
 			Err(_) => Err(Error::ChannelClosingFailed),
 		}
@@ -1124,7 +1130,7 @@ impl Node {
 	fn receive_payment_inner(
 		&self, amount_msat: Option<u64>, description: &str, expiry_secs: u32,
 	) -> Result<Invoice, Error> {
-		let currency = match self.config.network {
+		let currency = match self.config.network.0 {
 			bitcoin::Network::Bitcoin => Currency::Bitcoin,
 			bitcoin::Network::Testnet => Currency::BitcoinTestnet,
 			bitcoin::Network::Regtest => Currency::Regtest,
