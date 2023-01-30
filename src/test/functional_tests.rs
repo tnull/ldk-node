@@ -1,6 +1,6 @@
 use crate::test::utils::*;
 use crate::test::utils::{expect_event, random_config};
-use crate::{Builder, Error, Event, PaymentDirection, PaymentStatus};
+use crate::{Builder, Error, Event, Network, PaymentDirection, PaymentStatus};
 
 use bitcoin::Amount;
 
@@ -29,8 +29,8 @@ fn channel_full_cycle() {
 	);
 	node_a.sync_wallets().unwrap();
 	node_b.sync_wallets().unwrap();
-	assert_eq!(node_a.on_chain_balance().unwrap().get_spendable(), 100000);
-	assert_eq!(node_b.on_chain_balance().unwrap().get_spendable(), 100000);
+	assert_eq!(node_a.onchain_balance().unwrap().get_spendable(), 100000);
+	assert_eq!(node_b.onchain_balance().unwrap().get_spendable(), 100000);
 
 	println!("\nA -- connect_open_channel -> B");
 	node_a
@@ -54,18 +54,18 @@ fn channel_full_cycle() {
 	node_a.sync_wallets().unwrap();
 	node_b.sync_wallets().unwrap();
 
-	let node_a_balance = node_a.on_chain_balance().unwrap();
+	let node_a_balance = node_a.onchain_balance().unwrap();
 	assert!(node_a_balance.get_spendable() < 50000);
 	assert!(node_a_balance.get_spendable() > 40000);
-	assert_eq!(node_b.on_chain_balance().unwrap().get_spendable(), 100000);
+	assert_eq!(node_b.onchain_balance().unwrap().get_spendable(), 100000);
 
 	expect_event!(node_a, ChannelReady);
 
 	let channel_id = match node_b.next_event() {
-		ref e @ Event::ChannelReady { channel_id, .. } => {
+		ref e @ Event::ChannelReady { ref channel_id, .. } => {
 			println!("{} got event {:?}", std::stringify!(node_b), e);
 			node_b.event_handled();
-			channel_id
+			channel_id.clone()
 		}
 		ref e => {
 			panic!("{} got unexpected event!: {:?}", std::stringify!(node_b), e);
@@ -159,8 +159,8 @@ fn channel_full_cycle() {
 	node_a.sync_wallets().unwrap();
 	node_b.sync_wallets().unwrap();
 
-	assert!(node_a.on_chain_balance().unwrap().get_spendable() > 90000);
-	assert_eq!(node_b.on_chain_balance().unwrap().get_spendable(), 103234);
+	assert!(node_a.onchain_balance().unwrap().get_spendable() > 90000);
+	assert_eq!(node_b.onchain_balance().unwrap().get_spendable(), 103234);
 
 	node_a.stop().unwrap();
 	println!("\nA stopped");
@@ -192,8 +192,8 @@ fn channel_open_fails_when_funds_insufficient() {
 	);
 	node_a.sync_wallets().unwrap();
 	node_b.sync_wallets().unwrap();
-	assert_eq!(node_a.on_chain_balance().unwrap().get_spendable(), 100000);
-	assert_eq!(node_b.on_chain_balance().unwrap().get_spendable(), 100000);
+	assert_eq!(node_a.onchain_balance().unwrap().get_spendable(), 100000);
+	assert_eq!(node_b.onchain_balance().unwrap().get_spendable(), 100000);
 
 	println!("\nA -- connect_open_channel -> B");
 	assert_eq!(
@@ -213,7 +213,7 @@ fn connect_to_public_testnet_esplora() {
 	let esplora_url = electrsd.esplora_url.as_ref().unwrap();
 	let mut config = random_config(&esplora_url);
 	config.esplora_server_url = "https://blockstream.info/testnet/api".to_string();
-	config.network = bitcoin::Network::Testnet;
+	config.network = Network(bitcoin::Network::Testnet);
 	let node = Builder::from_config(config).build();
 	node.start().unwrap();
 	node.sync_wallets().unwrap();
@@ -232,13 +232,13 @@ fn start_stop_reinit() {
 	let expected_amount = Amount::from_sat(100000);
 
 	premine_and_distribute_funds(&bitcoind, &electrsd, vec![funding_address], expected_amount);
-	assert_eq!(node.on_chain_balance().unwrap().get_total(), 0);
+	assert_eq!(node.onchain_balance().unwrap().get_total(), 0);
 
 	node.start().unwrap();
 	assert_eq!(node.start(), Err(Error::AlreadyRunning));
 
 	node.sync_wallets().unwrap();
-	assert_eq!(node.on_chain_balance().unwrap().get_spendable(), expected_amount.to_sat());
+	assert_eq!(node.onchain_balance().unwrap().get_spendable(), expected_amount.to_sat());
 
 	node.stop().unwrap();
 	assert_eq!(node.stop(), Err(Error::NotRunning));
@@ -256,13 +256,13 @@ fn start_stop_reinit() {
 	reinitialized_node.start().unwrap();
 
 	assert_eq!(
-		reinitialized_node.on_chain_balance().unwrap().get_spendable(),
+		reinitialized_node.onchain_balance().unwrap().get_spendable(),
 		expected_amount.to_sat()
 	);
 
 	reinitialized_node.sync_wallets().unwrap();
 	assert_eq!(
-		reinitialized_node.on_chain_balance().unwrap().get_spendable(),
+		reinitialized_node.onchain_balance().unwrap().get_spendable(),
 		expected_amount.to_sat()
 	);
 
