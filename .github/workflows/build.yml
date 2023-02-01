@@ -22,8 +22,48 @@ jobs:
           profile: minimal
       - name: Build on Rust ${{ matrix.toolchain }}
         run: cargo build --verbose --color always
-      - name: Check formatting
+      - name: Check release build on Rust ${{ matrix.toolchain }}
+        run: cargo check --release --verbose --color always
+      - name: Check formatting on Rust ${{ matrix.toolchain }}
         if: matrix.check-fmt
         run: rustup component add rustfmt && cargo fmt --all -- --check
       - name: Test on Rust ${{ matrix.toolchain }}
         run: cargo test
+
+          #  generate_bindings:
+          #    strategy:
+          #      matrix:
+          #        toolchain: [ stable ]
+          #    runs-on: ubuntu-latest
+          #    steps:
+          #      - name: Checkout source code
+          #        uses: actions/checkout@v2
+          #      - name: Install Rust ${{ matrix.toolchain }} toolchain
+          #        uses: actions-rs/toolchain@v1
+          #        with:
+          #          toolchain: ${{ matrix.toolchain }}
+          #          override: true
+          #          profile: minimal
+          #      - name: Generate language bindings
+          #        run: scripts/uniffi_bindgen_generate.sh
+          #      - name: Cache bitcoind binary
+          #        id: cache-bitcoind
+          #        uses: actions/cache@v3
+          #        with:
+          #          path: bitcoin-24.0.1-x86_64-linux-gnu.tar.gz
+          #          key: bitcoin-24.0.1-x86_64-linux-gnu.tar.gz
+          #      - name: Fetch Bitcoind
+          #        if: steps.cache-bitcoind.outputs.cache-hit != 'true'
+          #        run: |
+          #          curl --verbose -L -o ${BITCOIND_FILENAME} ${BITCOIND_URL}
+          #          echo "Sha sum: $(sha256sum ${BITCOIND_FILENAME} | awk '{ print $1 }')"
+          #          if [ "$(sha256sum $BITCOIND_FILENAME | awk '{ print $1 }')" != "${EXPECTED_BITCOIND_SHASUM}" ]; then
+          #            echo "Bad hash"
+          #            exit 1
+          #          fi
+          #          tar xvzf ${BITCOIND_FILENAME}
+          #          ./bitcoin-24.0.1/bin/bitcoind -regtest --fallbackfee=0.00001 &
+          #        env:
+          #          EXPECTED_BITCOIND_SHASUM: 49df6e444515d457ea0b885d66f521f2a26ca92ccf73d5296082e633544253bf
+          #          BITCOIND_URL: https://bitcoincore.org/bin/bitcoin-core-24.0.1/bitcoin-24.0.1-x86_64-linux-gnu.tar.gz
+          #          BITCOIND_FILENAME: bitcoin-24.0.1-x86_64-linux-gnu.tar.gz
