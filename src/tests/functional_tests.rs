@@ -1,5 +1,5 @@
 use crate::tests::test_utils::expect_event;
-use crate::{Builder, Config, Error, Event};
+use crate::{Builder, Config, Error, Event, PaymentDirection, PaymentStatus};
 
 use bitcoin::{Address, Amount, OutPoint, Txid};
 use bitcoind::bitcoincore_rpc::RpcApi;
@@ -239,7 +239,7 @@ fn channel_full_cycle() {
 
 	let invoice = node_b.receive_payment(invoice_amount, &"asdf", 9217).unwrap();
 	let overpaid_amount = invoice_amount + 100;
-	node_a.send_payment_using_amount(invoice, overpaid_amount).unwrap();
+	let payment_hash = node_a.send_payment_using_amount(invoice, overpaid_amount).unwrap();
 	expect_event!(node_a, PaymentSuccessful);
 	let received_amount = match node_b.next_event() {
 		ref e @ Event::PaymentReceived { amount_msat, .. } => {
@@ -252,12 +252,19 @@ fn channel_full_cycle() {
 		}
 	};
 	assert_eq!(received_amount, overpaid_amount);
+	assert_eq!(node_a.payment_info(&payment_hash).unwrap().status, PaymentStatus::Succeeded);
+	assert_eq!(node_a.payment_info(&payment_hash).unwrap().direction, PaymentDirection::Outbound);
+	assert_eq!(node_a.payment_info(&payment_hash).unwrap().amount_msat, Some(overpaid_amount));
+	assert_eq!(node_b.payment_info(&payment_hash).unwrap().status, PaymentStatus::Succeeded);
+	assert_eq!(node_b.payment_info(&payment_hash).unwrap().direction, PaymentDirection::Inbound);
+	assert_eq!(node_b.payment_info(&payment_hash).unwrap().amount_msat, Some(overpaid_amount));
 
 	// Test "zero-amount" invoice payment
 	let variable_amount_invoice = node_b.receive_variable_amount_payment(&"asdf", 9217).unwrap();
 	let determined_amount = 1234567;
 	assert_eq!(Err(Error::InvalidInvoice), node_a.send_payment(variable_amount_invoice.clone()));
-	node_a.send_payment_using_amount(variable_amount_invoice, determined_amount).unwrap();
+	let payment_hash =
+		node_a.send_payment_using_amount(variable_amount_invoice, determined_amount).unwrap();
 
 	expect_event!(node_a, PaymentSuccessful);
 	let received_amount = match node_b.next_event() {
@@ -271,6 +278,12 @@ fn channel_full_cycle() {
 		}
 	};
 	assert_eq!(received_amount, determined_amount);
+	assert_eq!(node_a.payment_info(&payment_hash).unwrap().status, PaymentStatus::Succeeded);
+	assert_eq!(node_a.payment_info(&payment_hash).unwrap().direction, PaymentDirection::Outbound);
+	assert_eq!(node_a.payment_info(&payment_hash).unwrap().amount_msat, Some(determined_amount));
+	assert_eq!(node_b.payment_info(&payment_hash).unwrap().status, PaymentStatus::Succeeded);
+	assert_eq!(node_b.payment_info(&payment_hash).unwrap().direction, PaymentDirection::Inbound);
+	assert_eq!(node_b.payment_info(&payment_hash).unwrap().amount_msat, Some(determined_amount));
 
 	node_b.close_channel(&channel_id, &node_a.node_id()).unwrap();
 	expect_event!(node_a, ChannelClosed);
