@@ -1211,9 +1211,8 @@ impl Node {
 	}
 
 	/// Query for information about the status of a specific payment.
-	pub fn payment_info(&self, payment_hash: &[u8; 32]) -> Option<PaymentInfo> {
-		let payment_hash = PaymentHash(*payment_hash);
-		self.payment_store.get(&payment_hash)
+	pub fn payment_info(&self, payment_hash: &PaymentHash) -> Option<PaymentInfo> {
+		self.payment_store.get(payment_hash)
 	}
 }
 
