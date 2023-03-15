@@ -297,7 +297,7 @@ where
 			} => {
 				log_info!(
 					self.logger,
-					"Received payment from payment hash {} of {} msats",
+					"Received payment from payment hash {} of {}msat",
 					hex_utils::to_string(&payment_hash.0),
 					amount_msat,
 				);
@@ -336,7 +336,7 @@ where
 			} => {
 				log_info!(
 					self.logger,
-					"Claimed payment from payment hash {} of {} msats.",
+					"Claimed payment from payment hash {} of {}msat.",
 					hex_utils::to_string(&payment_hash.0),
 					amount_msat,
 				);
@@ -379,7 +379,7 @@ where
 						.expect("Failed to access payment store");
 					log_info!(
 						self.logger,
-						"Successfully sent payment of {} msats{} from \
+						"Successfully sent payment of {}msat{} from \
 						payment hash {:?} with preimage {:?}",
 						payment_info.amount_msat.unwrap(),
 						if let Some(fee) = fee_paid_msat {
@@ -490,7 +490,7 @@ where
 				if claim_from_onchain_tx {
 					log_info!(
 						self.logger,
-						"Forwarded payment{}{}, earning {} msats in fees from claiming onchain.",
+						"Forwarded payment{}{}, earning {}msat in fees from claiming onchain.",
 						from_prev_str,
 						to_next_str,
 						fee_earned,
@@ -498,7 +498,7 @@ where
 				} else {
 					log_info!(
 						self.logger,
-						"Forwarded payment{}{}, earning {} msats in fees.",
+						"Forwarded payment{}{}, earning {}msat in fees.",
 						from_prev_str,
 						to_next_str,
 						fee_earned,
