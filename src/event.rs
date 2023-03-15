@@ -295,6 +295,22 @@ where
 				via_channel_id: _,
 				via_user_channel_id: _,
 			} => {
+				if let Some(info) = self.payment_store.get(&payment_hash) {
+					if info.status == PaymentStatus::Succeeded {
+						log_info!(
+							self.logger,
+							"Refused duplicate inbound payment from payment hash {} of {}msat",
+							hex_utils::to_string(&payment_hash.0),
+							amount_msat,
+						);
+						self.channel_manager.fail_htlc_backwards(&payment_hash);
+						self.payment_store
+							.set_status(&payment_hash, PaymentStatus::Failed)
+							.expect("Failed to access payment store");
+						return;
+					}
+				}
+
 				log_info!(
 					self.logger,
 					"Received payment from payment hash {} of {}msat",

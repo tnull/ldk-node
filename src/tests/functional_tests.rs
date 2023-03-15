@@ -219,13 +219,23 @@ fn channel_full_cycle() {
 	};
 
 	println!("\nB receive_payment");
-	let invoice = node_b.receive_payment(1000000, &"asdf", 9217).unwrap();
+	let invoice_amount = 1000000;
+	let invoice = node_b.receive_payment(invoice_amount, &"asdf", 9217).unwrap();
 
 	println!("\nA send_payment");
-	node_a.send_payment(invoice).unwrap();
+	let payment_hash = node_a.send_payment(invoice.clone()).unwrap();
 
 	expect_event!(node_a, PaymentSuccessful);
 	expect_event!(node_b, PaymentReceived);
+	assert_eq!(node_a.payment_info(&payment_hash).unwrap().status, PaymentStatus::Succeeded);
+	assert_eq!(node_a.payment_info(&payment_hash).unwrap().direction, PaymentDirection::Outbound);
+	assert_eq!(node_a.payment_info(&payment_hash).unwrap().amount_msat, Some(invoice_amount));
+	assert_eq!(node_b.payment_info(&payment_hash).unwrap().status, PaymentStatus::Succeeded);
+	assert_eq!(node_b.payment_info(&payment_hash).unwrap().direction, PaymentDirection::Inbound);
+	assert_eq!(node_b.payment_info(&payment_hash).unwrap().amount_msat, Some(invoice_amount));
+
+	// Assert we fail duplicate outbound payments.
+	assert_eq!(Err(Error::NonUniquePaymentHash), node_a.send_payment(invoice));
 
 	// Test under-/overpayment
 	let invoice_amount = 1000000;
