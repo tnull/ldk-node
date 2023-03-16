@@ -106,7 +106,6 @@ dictionary PaymentInfo {
 	PaymentStatus status;
 };
 
-
 [Custom]
 typedef string PublicKey;
 
