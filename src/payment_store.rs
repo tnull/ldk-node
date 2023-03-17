@@ -83,9 +83,9 @@ impl<K: Deref> PaymentInfoStorage<K>
 where
 	K::Target: KVStorePersister + KVStoreUnpersister,
 {
-	pub(crate) fn from_payments(mut payments: Vec<PaymentInfo>, persister: K) -> Self {
+	pub(crate) fn from_payments(payments: Vec<PaymentInfo>, persister: K) -> Self {
 		let payments = Mutex::new(HashMap::from_iter(
-			payments.drain(..).map(|payment_info| (payment_info.payment_hash, payment_info)),
+			payments.into_iter().map(|payment_info| (payment_info.payment_hash, payment_info)),
 		));
 		Self { payments, persister }
 	}
