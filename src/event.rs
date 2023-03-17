@@ -182,7 +182,7 @@ impl Writeable for EventQueueSerWrapper<'_> {
 	}
 }
 
-pub(crate) struct EventHandler<K: Deref, L: Deref>
+pub(crate) struct EventHandler<K: Deref + Clone, L: Deref>
 where
 	K::Target: KVStorePersister + KVStoreUnpersister,
 	L::Target: Logger,
@@ -198,7 +198,7 @@ where
 	_config: Arc<Config>,
 }
 
-impl<K: Deref, L: Deref> EventHandler<K, L>
+impl<K: Deref + Clone, L: Deref> EventHandler<K, L>
 where
 	K::Target: KVStorePersister + KVStoreUnpersister,
 	L::Target: Logger,
@@ -223,7 +223,7 @@ where
 	}
 }
 
-impl<K: Deref, L: Deref> LdkEventHandler for EventHandler<K, L>
+impl<K: Deref + Clone, L: Deref> LdkEventHandler for EventHandler<K, L>
 where
 	K::Target: KVStorePersister + KVStoreUnpersister,
 	L::Target: Logger,
@@ -364,25 +364,24 @@ where
 					PaymentPurpose::SpontaneousPayment(preimage) => (Some(preimage), None),
 				};
 
-				let payment_info =
-					if let Some(mut payment_info) = self.payment_store.get(&payment_hash) {
+				let mut locked_store = self.payment_store.lock().unwrap();
+				locked_store
+					.entry(payment_hash)
+					.and_modify(|payment_info| {
 						payment_info.status = PaymentStatus::Succeeded;
 						payment_info.preimage = payment_preimage;
 						payment_info.secret = payment_secret;
 						payment_info.amount_msat = Some(amount_msat);
-						payment_info
-					} else {
-						PaymentInfo {
-							preimage: payment_preimage,
-							payment_hash,
-							secret: payment_secret,
-							amount_msat: Some(amount_msat),
-							direction: PaymentDirection::Inbound,
-							status: PaymentStatus::Succeeded,
-						}
-					};
+					})
+					.or_insert(PaymentInfo {
+						preimage: payment_preimage,
+						payment_hash,
+						secret: payment_secret,
+						amount_msat: Some(amount_msat),
+						direction: PaymentDirection::Inbound,
+						status: PaymentStatus::Succeeded,
+					});
 
-				self.payment_store.insert(payment_info).expect("Failed to access payment store");
 				self.event_queue
 					.add_event(Event::PaymentReceived { payment_hash, amount_msat })
 					.expect("Failed to push to event queue");
