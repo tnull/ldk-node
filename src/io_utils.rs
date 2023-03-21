@@ -104,11 +104,17 @@ impl KVStoreUnpersister for FilesystemPersister {
 		}
 
 		fs::remove_file(&dest_file)?;
-		let parent_directory = dest_file.parent().unwrap();
-		let dir_file = fs::OpenOptions::new().read(true).open(parent_directory)?;
 		#[cfg(not(target_os = "windows"))]
 		{
+			let parent_directory = dest_file.parent().unwrap();
+			let dir_file = fs::OpenOptions::new().read(true).open(parent_directory)?;
 			unsafe {
+				// The above call to `fs::remove_file` corresponds to POSIX `unlink`, whose changes
+				// to the inode might get cached (and hence possibly lost on crash), depending on
+				// the target platform and file system.
+				//
+				// In order to assert we permanently removed the file in question we therefore
+				// call `fsync` on the parent directory on platforms that support it,
 				libc::fsync(dir_file.as_raw_fd());
 			}
 		}
