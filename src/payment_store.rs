@@ -70,7 +70,7 @@ impl_writeable_tlv_based_enum!(PaymentStatus,
 );
 
 /// The payment information will be persisted under this prefix.
-pub(crate) const PAYMENT_INFO_PERSISTENCE_PREFIX: &str = "payments";
+pub(crate) const PAYMENT_INFO_PERSISTENCE_NAMESPACE: &str = "payments";
 
 pub(crate) struct PaymentInfoStorage<K: Deref + Clone>
 where
@@ -104,7 +104,7 @@ where
 
 		let key = format!(
 			"{}/{}",
-			PAYMENT_INFO_PERSISTENCE_PREFIX,
+			PAYMENT_INFO_PERSISTENCE_NAMESPACE,
 			hex_utils::to_string(&payment_hash.0)
 		);
 
@@ -121,7 +121,7 @@ where
 	pub(crate) fn remove(&self, payment_hash: &PaymentHash) -> Result<(), Error> {
 		let key = format!(
 			"{}/{}",
-			PAYMENT_INFO_PERSISTENCE_PREFIX,
+			PAYMENT_INFO_PERSISTENCE_NAMESPACE,
 			hex_utils::to_string(&payment_hash.0)
 		);
 		self.persister.unpersist(&key).map_err(|_| Error::PersistenceFailed)?;
@@ -146,7 +146,7 @@ where
 
 			let key = format!(
 				"{}/{}",
-				PAYMENT_INFO_PERSISTENCE_PREFIX,
+				PAYMENT_INFO_PERSISTENCE_NAMESPACE,
 				hex_utils::to_string(&payment_hash.0)
 			);
 			self.persister.persist(&key, p).map_err(|_| Error::PersistenceFailed)?;
@@ -188,7 +188,7 @@ where
 	fn drop(&mut self) {
 		for key in self.touched_keys.iter() {
 			let store_key =
-				format!("{}/{}", PAYMENT_INFO_PERSISTENCE_PREFIX, hex_utils::to_string(&key.0));
+				format!("{}/{}", PAYMENT_INFO_PERSISTENCE_NAMESPACE, hex_utils::to_string(&key.0));
 
 			match self.inner.entry(*key) {
 				hash_map::Entry::Vacant(_) => {

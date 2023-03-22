@@ -85,6 +85,8 @@ pub use lightning_invoice;
 pub use error::Error;
 pub use event::Event;
 use event::{EventHandler, EventQueue};
+use io::fs_store::FilesystemStore;
+use io::{KVStore, CHANNEL_MANAGER_PERSISTENCE_KEY, CHANNEL_MANAGER_PERSISTENCE_NAMESPACE};
 use payment_store::PaymentInfoStorage;
 pub use payment_store::{PaymentDirection, PaymentInfo, PaymentStatus};
 use peer_store::{PeerInfo, PeerInfoStorage};
@@ -112,7 +114,6 @@ use lightning::util::ser::ReadableArgs;
 
 use lightning_background_processor::BackgroundProcessor;
 use lightning_background_processor::GossipSync as BPGossipSync;
-use lightning_persister::FilesystemPersister;
 
 use lightning_transaction_sync::EsploraSyncClient;
 
@@ -329,8 +330,7 @@ impl Builder {
 
 		let wallet = Arc::new(Wallet::new(blockchain, bdk_wallet, Arc::clone(&logger)));
 
-		// Initialize Persist
-		let persister = Arc::new(FilesystemPersister::new(ldk_data_dir.clone()));
+		let kv_store = Arc::new(FilesystemStore::new(ldk_data_dir.clone().into()));
 
 		// Initialize the ChainMonitor
 		let chain_monitor: Arc<ChainMonitor> = Arc::new(chainmonitor::ChainMonitor::new(
@@ -338,7 +338,7 @@ impl Builder {
 			Arc::clone(&wallet),
 			Arc::clone(&logger),
 			Arc::clone(&wallet),
-			Arc::clone(&persister),
+			Arc::clone(&kv_store),
 		));
 
 		// Initialize the KeysManager
@@ -370,15 +370,17 @@ impl Builder {
 		));
 
 		// Read ChannelMonitor state from disk
-		let mut channel_monitors = persister
+		let mut channel_monitors = kv_store
 			.read_channelmonitors(Arc::clone(&keys_manager), Arc::clone(&keys_manager))
-			.expect("Failed to read channel monitors from disk");
+			.expect("Failed to read channel monitors from store");
 
 		// Initialize the ChannelManager
 		let mut user_config = UserConfig::default();
 		user_config.channel_handshake_limits.force_announced_channel_preference = false;
 		let channel_manager = {
-			if let Ok(mut f) = fs::File::open(format!("{}/manager", ldk_data_dir)) {
+			if let Ok(mut reader) = kv_store
+				.read(CHANNEL_MANAGER_PERSISTENCE_NAMESPACE, CHANNEL_MANAGER_PERSISTENCE_KEY)
+			{
 				let channel_monitor_references =
 					channel_monitors.iter_mut().map(|(_, chanmon)| chanmon).collect();
 				let read_args = ChannelManagerReadArgs::new(
@@ -394,8 +396,8 @@ impl Builder {
 					channel_monitor_references,
 				);
 				let (_hash, channel_manager) =
-					<(BlockHash, ChannelManager)>::read(&mut f, read_args)
-						.expect("Failed to read channel manager from disk");
+					<(BlockHash, ChannelManager)>::read(&mut reader, read_args)
+						.expect("Failed to read channel manager from store");
 				channel_manager
 			} else {
 				// We're starting a fresh node.
@@ -467,29 +469,29 @@ impl Builder {
 		// Init payment info storage
 		let payments = io::utils::read_payment_info(config.as_ref());
 		let payment_store =
-			Arc::new(PaymentInfoStorage::from_payments(payments, Arc::clone(&persister)));
+			Arc::new(PaymentInfoStorage::from_payments(payments, Arc::clone(&kv_store)));
 
 		// Restore event handler from disk or create a new one.
 		let event_queue = if let Ok(mut f) =
 			fs::File::open(format!("{}/{}", ldk_data_dir, event::EVENTS_PERSISTENCE_KEY))
 		{
 			Arc::new(
-				EventQueue::read(&mut f, Arc::clone(&persister))
+				EventQueue::read(&mut f, Arc::clone(&kv_store))
 					.expect("Failed to read event queue from disk."),
 			)
 		} else {
-			Arc::new(EventQueue::new(Arc::clone(&persister)))
+			Arc::new(EventQueue::new(Arc::clone(&kv_store)))
 		};
 
 		let peer_store = if let Ok(mut f) =
 			fs::File::open(format!("{}/{}", ldk_data_dir, peer_store::PEER_INFO_PERSISTENCE_KEY))
 		{
 			Arc::new(
-				PeerInfoStorage::read(&mut f, Arc::clone(&persister))
+				PeerInfoStorage::read(&mut f, Arc::clone(&kv_store))
 					.expect("Failed to read peer information from disk."),
 			)
 		} else {
-			Arc::new(PeerInfoStorage::new(Arc::clone(&persister)))
+			Arc::new(PeerInfoStorage::new(Arc::clone(&kv_store)))
 		};
 
 		let running = RwLock::new(None);
@@ -506,7 +508,7 @@ impl Builder {
 			keys_manager,
 			network_graph,
 			gossip_sync,
-			persister,
+			kv_store,
 			logger,
 			scorer,
 			peer_store,
@@ -532,18 +534,18 @@ pub struct Node {
 	config: Arc<Config>,
 	wallet: Arc<Wallet<bdk::database::SqliteDatabase>>,
 	tx_sync: Arc<EsploraSyncClient<Arc<FilesystemLogger>>>,
-	event_queue: Arc<EventQueue<Arc<FilesystemPersister>>>,
+	event_queue: Arc<EventQueue<Arc<FilesystemStore>>>,
 	channel_manager: Arc<ChannelManager>,
 	chain_monitor: Arc<ChainMonitor>,
 	peer_manager: Arc<PeerManager>,
 	keys_manager: Arc<KeysManager>,
 	network_graph: Arc<NetworkGraph>,
 	gossip_sync: Arc<GossipSync>,
-	persister: Arc<FilesystemPersister>,
+	kv_store: Arc<FilesystemStore>,
 	logger: Arc<FilesystemLogger>,
 	scorer: Arc<Mutex<Scorer>>,
-	peer_store: Arc<PeerInfoStorage<FilesystemPersister>>,
-	payment_store: Arc<PaymentInfoStorage<Arc<FilesystemPersister>>>,
+	peer_store: Arc<PeerInfoStorage<FilesystemStore>>,
+	payment_store: Arc<PaymentInfoStorage<Arc<FilesystemStore>>>,
 }
 
 impl Node {
@@ -740,7 +742,7 @@ impl Node {
 
 		// Setup background processing
 		let _background_processor = BackgroundProcessor::start(
-			Arc::clone(&self.persister),
+			Arc::clone(&self.kv_store),
 			Arc::clone(&event_handler),
 			Arc::clone(&self.chain_monitor),
 			Arc::clone(&self.channel_manager),

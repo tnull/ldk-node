@@ -1,4 +1,4 @@
-use crate::payment_store::{PaymentInfo, PAYMENT_INFO_PERSISTENCE_PREFIX};
+use crate::payment_store::{PaymentInfo, PAYMENT_INFO_PERSISTENCE_NAMESPACE};
 use crate::{Config, FilesystemLogger, NetworkGraph, Scorer, WALLET_KEYS_SEED_LEN};
 
 use lightning::routing::scoring::{ProbabilisticScorer, ProbabilisticScoringParameters};
@@ -64,7 +64,7 @@ pub(crate) fn read_scorer(
 
 pub(crate) fn read_payment_info(config: &Config) -> Vec<PaymentInfo> {
 	let ldk_data_dir = format!("{}/ldk", config.storage_dir_path);
-	let payment_store_path = format!("{}/{}", ldk_data_dir, PAYMENT_INFO_PERSISTENCE_PREFIX);
+	let payment_store_path = format!("{}/{}", ldk_data_dir, PAYMENT_INFO_PERSISTENCE_NAMESPACE);
 	let mut payments = Vec::new();
 
 	if let Ok(res) = fs::read_dir(payment_store_path) {
