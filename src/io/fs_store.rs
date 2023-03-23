@@ -14,6 +14,9 @@ use std::os::unix::io::AsRawFd;
 use lightning::util::persist::KVStorePersister;
 use lightning::util::ser::Writeable;
 
+use rand::distributions::Alphanumeric;
+use rand::{thread_rng, Rng};
+
 #[cfg(target_os = "windows")]
 use {std::ffi::OsStr, std::os::windows::ffi::OsStrExt};
 
@@ -166,7 +169,10 @@ impl FilesystemWriter {
 		// The way to atomically write a file on Unix platforms is:
 		// open(tmpname), write(tmpfile), fsync(tmpfile), close(tmpfile), rename(), fsync(dir)
 		let mut tmp_file = dest_file.clone();
-		tmp_file.set_extension("tmp");
+		let mut rng = thread_rng();
+		let rand_str: String = (0..7).map(|_| rng.sample(Alphanumeric) as char).collect();
+		let ext = format!("{}.tmp", rand_str);
+		tmp_file.set_extension(ext);
 
 		let tmp_writer = BufWriter::new(fs::File::create(&tmp_file)?);
 
