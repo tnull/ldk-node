@@ -314,3 +314,25 @@ impl UniffiCustomTypeConverter for Network {
 		obj.0.to_string()
 	}
 }
+
+#[derive(PartialEq, Eq, Debug, Clone)]
+pub struct Entropy(pub [u8; 64]);
+
+impl UniffiCustomTypeConverter for Entropy {
+	type Builtin = String;
+
+	fn into_custom(val: Self::Builtin) -> uniffi::Result<Self> {
+		if let Some(hex_vec) = hex_utils::to_vec(&val) {
+			if hex_vec.len() == 64 {
+				let mut entropy = [0u8; 64];
+				entropy.copy_from_slice(&hex_vec[..]);
+				return Ok(Self(entropy));
+			}
+		}
+		Err(Error::ChannelIdInvalid.into())
+	}
+
+	fn from_custom(obj: Self) -> Self::Builtin {
+		hex_utils::to_string(&obj.0)
+	}
+}

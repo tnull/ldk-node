@@ -48,8 +48,8 @@ use payment_store::PaymentInfoStorage;
 pub use payment_store::{PaymentDirection, PaymentInfo, PaymentStatus};
 use peer_store::{PeerInfo, PeerInfoStorage};
 use types::{
-	ChainMonitor, ChannelManager, GossipSync, KeysManager, Network, NetworkGraph, OnionMessenger,
-	PeerManager, Scorer,
+	ChainMonitor, ChannelManager, Entropy, GossipSync, KeysManager, Network, NetworkGraph,
+	OnionMessenger, PeerManager, Scorer,
 };
 pub use types::{ChannelId, UserChannelId};
 use wallet::Wallet;
@@ -170,6 +170,12 @@ impl Builder {
 	/// Creates a new builder instance from an [`Config`].
 	pub fn from_config(config: Config) -> Self {
 		let entropy_source = None;
+		Self { config, entropy_source }
+	}
+
+	/// Creates a new builder instance from a [`Config`] and [`WalletEntropSource`]
+	pub fn from_config_and_entropy(config: Config, entropy: Entropy) -> Self {
+		let entropy_source = Some(WalletEntropySource::SeedBytes(entropy.0));
 		Self { config, entropy_source }
 	}
 
