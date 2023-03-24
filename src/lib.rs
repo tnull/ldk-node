@@ -107,6 +107,7 @@ use lightning::ln::channelmanager::{
 use lightning::ln::peer_handler::{IgnoringMessageHandler, MessageHandler};
 use lightning::ln::{PaymentHash, PaymentPreimage};
 use lightning::routing::gossip::P2PGossipSync;
+use lightning::routing::scoring::{ProbabilisticScorer, ProbabilisticScoringParameters};
 use lightning::routing::utxo::UtxoLookup;
 
 use lightning::util::config::{ChannelHandshakeConfig, ChannelHandshakeLimits, UserConfig};
@@ -355,12 +356,38 @@ impl Builder {
 
 		// Initialize the network graph, scorer, and router
 		let network_graph =
-			Arc::new(io::utils::read_network_graph(config.as_ref(), Arc::clone(&logger)));
-		let scorer = Arc::new(Mutex::new(io::utils::read_scorer(
-			config.as_ref(),
+			match io::utils::read_network_graph(Arc::clone(&kv_store), Arc::clone(&logger)) {
+				Ok(graph) => Arc::new(graph),
+				Err(e) => {
+					if e.kind() == std::io::ErrorKind::NotFound {
+						Arc::new(NetworkGraph::new(config.network, Arc::clone(&logger)))
+					} else {
+						log_error!(logger, "Failed to read network graph: {}", e.to_string());
+						panic!("Failed to read network graph: {}", e.to_string());
+					}
+				}
+			};
+
+		let scorer = match io::utils::read_scorer(
+			Arc::clone(&kv_store),
 			Arc::clone(&network_graph),
 			Arc::clone(&logger),
-		)));
+		) {
+			Ok(scorer) => Arc::new(Mutex::new(scorer)),
+			Err(e) => {
+				if e.kind() == std::io::ErrorKind::NotFound {
+					let params = ProbabilisticScoringParameters::default();
+					Arc::new(Mutex::new(ProbabilisticScorer::new(
+						params,
+						Arc::clone(&network_graph),
+						Arc::clone(&logger),
+					)))
+				} else {
+					log_error!(logger, "Failed to read scorer: {}", e.to_string());
+					panic!("Failed to read scorer: {}", e.to_string());
+				}
+			}
+		};
 
 		let router = Arc::new(DefaultRouter::new(
 			Arc::clone(&network_graph),
@@ -369,10 +396,18 @@ impl Builder {
 			Arc::clone(&scorer),
 		));
 
-		// Read ChannelMonitor state from disk
-		let mut channel_monitors = kv_store
-			.read_channelmonitors(Arc::clone(&keys_manager), Arc::clone(&keys_manager))
-			.expect("Failed to read channel monitors from store");
+		// Read ChannelMonitor state from store
+		let mut channel_monitors = match io::utils::read_channel_monitors(
+			Arc::clone(&kv_store),
+			Arc::clone(&keys_manager),
+			Arc::clone(&keys_manager),
+		) {
+			Ok(monitors) => monitors,
+			Err(e) => {
+				log_error!(logger, "Failed to read channel monitors: {}", e.to_string());
+				panic!("Failed to read channel monitors: {}", e.to_string());
+			}
+		};
 
 		// Initialize the ChannelManager
 		let mut user_config = UserConfig::default();
@@ -467,31 +502,38 @@ impl Builder {
 		));
 
 		// Init payment info storage
-		let payments = io::utils::read_payment_info(config.as_ref());
-		let payment_store =
-			Arc::new(PaymentInfoStorage::from_payments(payments, Arc::clone(&kv_store)));
-
-		// Restore event handler from disk or create a new one.
-		let event_queue = if let Ok(mut f) =
-			fs::File::open(format!("{}/{}", ldk_data_dir, event::EVENTS_PERSISTENCE_KEY))
-		{
-			Arc::new(
-				EventQueue::read(&mut f, Arc::clone(&kv_store))
-					.expect("Failed to read event queue from disk."),
-			)
-		} else {
-			Arc::new(EventQueue::new(Arc::clone(&kv_store)))
+		let payment_store = match io::utils::read_payment_info(Arc::clone(&kv_store)) {
+			Ok(payments) => {
+				Arc::new(PaymentInfoStorage::from_payments(payments, Arc::clone(&kv_store)))
+			}
+			Err(e) => {
+				log_error!(logger, "Failed to read payment information: {}", e.to_string());
+				panic!("Failed to read payment information: {}", e.to_string());
+			}
 		};
 
-		let peer_store = if let Ok(mut f) =
-			fs::File::open(format!("{}/{}", ldk_data_dir, peer_store::PEER_INFO_PERSISTENCE_KEY))
-		{
-			Arc::new(
-				PeerInfoStorage::read(&mut f, Arc::clone(&kv_store))
-					.expect("Failed to read peer information from disk."),
-			)
-		} else {
-			Arc::new(PeerInfoStorage::new(Arc::clone(&kv_store)))
+		let event_queue = match io::utils::read_event_queue(Arc::clone(&kv_store)) {
+			Ok(event_queue) => Arc::new(event_queue),
+			Err(e) => {
+				if e.kind() == std::io::ErrorKind::NotFound {
+					Arc::new(EventQueue::new(Arc::clone(&kv_store)))
+				} else {
+					log_error!(logger, "Failed to read event queue: {}", e.to_string());
+					panic!("Failed to read event queue: {}", e.to_string());
+				}
+			}
+		};
+
+		let peer_store = match io::utils::read_peer_info(Arc::clone(&kv_store)) {
+			Ok(peer_store) => Arc::new(peer_store),
+			Err(e) => {
+				if e.kind() == std::io::ErrorKind::NotFound {
+					Arc::new(PeerInfoStorage::new(Arc::clone(&kv_store)))
+				} else {
+					log_error!(logger, "Failed to read peer store: {}", e.to_string());
+					panic!("Failed to read peer store: {}", e.to_string());
+				}
+			}
 		};
 
 		let running = RwLock::new(None);
@@ -544,7 +586,7 @@ pub struct Node {
 	kv_store: Arc<FilesystemStore>,
 	logger: Arc<FilesystemLogger>,
 	scorer: Arc<Mutex<Scorer>>,
-	peer_store: Arc<PeerInfoStorage<FilesystemStore>>,
+	peer_store: Arc<PeerInfoStorage<Arc<FilesystemStore>>>,
 	payment_store: Arc<PaymentInfoStorage<Arc<FilesystemStore>>>,
 }
 

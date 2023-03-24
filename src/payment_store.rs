@@ -1,5 +1,5 @@
 use crate::hex_utils;
-use crate::io::KVStoreUnpersister;
+use crate::io::{KVStoreUnpersister, PAYMENT_INFO_PERSISTENCE_NAMESPACE};
 use crate::Error;
 
 use lightning::ln::{PaymentHash, PaymentPreimage, PaymentSecret};
@@ -68,9 +68,6 @@ impl_writeable_tlv_based_enum!(PaymentStatus,
 	(1, Succeeded) => {},
 	(2, Failed) => {};
 );
-
-/// The payment information will be persisted under this prefix.
-pub(crate) const PAYMENT_INFO_PERSISTENCE_NAMESPACE: &str = "payments";
 
 pub(crate) struct PaymentInfoStorage<K: Deref + Clone>
 where

@@ -3,7 +3,7 @@ use crate::{
 	PaymentInfo, PaymentInfoStorage, PaymentStatus, Wallet,
 };
 
-use crate::io::KVStoreUnpersister;
+use crate::io::{KVStoreUnpersister, EVENT_QUEUE_PERSISTENCE_KEY};
 use crate::logger::{log_error, log_info, Logger};
 
 use lightning::chain::chaininterface::{BroadcasterInterface, ConfirmationTarget, FeeEstimator};
@@ -23,9 +23,6 @@ use std::collections::VecDeque;
 use std::ops::Deref;
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
-
-/// The event queue will be persisted under this key.
-pub(crate) const EVENTS_PERSISTENCE_KEY: &str = "events";
 
 /// An event emitted by [`Node`], which should be handled by the user.
 ///
@@ -86,7 +83,7 @@ impl_writeable_tlv_based_enum!(Event,
 	};
 );
 
-pub(crate) struct EventQueue<K: Deref>
+pub struct EventQueue<K: Deref>
 where
 	K::Target: KVStorePersister,
 {
@@ -134,7 +131,7 @@ where
 
 	fn persist_queue(&self, locked_queue: &VecDeque<Event>) -> Result<(), Error> {
 		self.persister
-			.persist(EVENTS_PERSISTENCE_KEY, &EventQueueSerWrapper(locked_queue))
+			.persist(EVENT_QUEUE_PERSISTENCE_KEY, &EventQueueSerWrapper(locked_queue))
 			.map_err(|_| Error::PersistenceFailed)?;
 		Ok(())
 	}
@@ -572,7 +569,7 @@ mod tests {
 		}
 
 		// Check we can read back what we persisted.
-		let persisted_bytes = persister.get_persisted_bytes(EVENTS_PERSISTENCE_KEY).unwrap();
+		let persisted_bytes = persister.get_persisted_bytes(EVENT_QUEUE_PERSISTENCE_KEY).unwrap();
 		let deser_event_queue =
 			EventQueue::read(&mut &persisted_bytes[..], Arc::clone(&persister)).unwrap();
 		assert_eq!(deser_event_queue.next_event(), expected_event);

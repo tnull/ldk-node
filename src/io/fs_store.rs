@@ -46,19 +46,19 @@ impl FilesystemStore {
 	}
 }
 
-impl KVStore<FilesystemReader, FilesystemWriter> for FilesystemStore {
-	fn read(&self, namespace: &str, key: &str) -> std::io::Result<FilesystemReader> {
+impl KVStore for FilesystemStore {
+	fn read(&self, namespace: &str, key: &str) -> std::io::Result<Box<dyn Read>> {
 		let mut dest_file = self.dest_dir.clone();
 		dest_file.push(namespace);
 		dest_file.push(key);
-		FilesystemReader::new(dest_file)
+		FilesystemReader::new(dest_file).map(|r| Box::new(r) as Box<dyn Read>)
 	}
 
-	fn write(&self, namespace: &str, key: &str) -> std::io::Result<FilesystemWriter> {
+	fn write(&self, namespace: &str, key: &str) -> std::io::Result<Box<dyn TransactionalWrite>> {
 		let mut dest_file = self.dest_dir.clone();
 		dest_file.push(namespace);
 		dest_file.push(key);
-		FilesystemWriter::new(dest_file)
+		FilesystemWriter::new(dest_file).map(|w| Box::new(w) as Box<dyn TransactionalWrite>)
 	}
 
 	fn remove(&self, namespace: &str, key: &str) -> std::io::Result<bool> {

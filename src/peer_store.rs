@@ -1,4 +1,5 @@
 use crate::hex_utils;
+use crate::io::PEER_INFO_PERSISTENCE_KEY;
 use crate::Error;
 
 use lightning::util::persist::KVStorePersister;
@@ -9,18 +10,22 @@ use bitcoin::secp256k1::PublicKey;
 use std::collections::HashMap;
 use std::convert::TryFrom;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, ToSocketAddrs};
-use std::sync::{Arc, RwLock};
+use std::ops::Deref;
+use std::sync::RwLock;
 
-/// The peer information will be persisted under this key.
-pub(crate) const PEER_INFO_PERSISTENCE_KEY: &str = "peers";
-
-pub(crate) struct PeerInfoStorage<K: KVStorePersister> {
+pub struct PeerInfoStorage<K: Deref>
+where
+	K::Target: KVStorePersister,
+{
 	peers: RwLock<HashMap<PublicKey, PeerInfo>>,
-	persister: Arc<K>,
+	persister: K,
 }
 
-impl<K: KVStorePersister> PeerInfoStorage<K> {
-	pub(crate) fn new(persister: Arc<K>) -> Self {
+impl<K: Deref> PeerInfoStorage<K>
+where
+	K::Target: KVStorePersister,
+{
+	pub(crate) fn new(persister: K) -> Self {
 		let peers = RwLock::new(HashMap::new());
 		Self { peers, persister }
 	}
@@ -58,10 +63,13 @@ impl<K: KVStorePersister> PeerInfoStorage<K> {
 	}
 }
 
-impl<K: KVStorePersister> ReadableArgs<Arc<K>> for PeerInfoStorage<K> {
+impl<K: Deref> ReadableArgs<K> for PeerInfoStorage<K>
+where
+	K::Target: KVStorePersister,
+{
 	#[inline]
 	fn read<R: lightning::io::Read>(
-		reader: &mut R, persister: Arc<K>,
+		reader: &mut R, persister: K,
 	) -> Result<Self, lightning::ln::msgs::DecodeError> {
 		let read_peers: PeerInfoStorageDeserWrapper = Readable::read(reader)?;
 		let peers: RwLock<HashMap<PublicKey, PeerInfo>> = RwLock::new(read_peers.0);
@@ -176,6 +184,7 @@ mod tests {
 	use crate::test::utils::TestPersister;
 	use proptest::prelude::*;
 	use std::str::FromStr;
+	use std::sync::Arc;
 
 	#[test]
 	fn peer_info_persistence() {
