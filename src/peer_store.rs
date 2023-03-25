@@ -1,8 +1,7 @@
 use crate::hex_utils;
-use crate::io::PEER_INFO_PERSISTENCE_KEY;
+use crate::io::{KVStore, PEER_INFO_PERSISTENCE_KEY, PEER_INFO_PERSISTENCE_NAMESPACE};
 use crate::Error;
 
-use lightning::util::persist::KVStorePersister;
 use lightning::util::ser::{Readable, ReadableArgs, Writeable, Writer};
 
 use bitcoin::secp256k1::PublicKey;
@@ -15,19 +14,19 @@ use std::sync::RwLock;
 
 pub struct PeerInfoStorage<K: Deref>
 where
-	K::Target: KVStorePersister,
+	K::Target: KVStore,
 {
 	peers: RwLock<HashMap<PublicKey, PeerInfo>>,
-	persister: K,
+	kv_store: K,
 }
 
 impl<K: Deref> PeerInfoStorage<K>
 where
-	K::Target: KVStorePersister,
+	K::Target: KVStore,
 {
-	pub(crate) fn new(persister: K) -> Self {
+	pub(crate) fn new(kv_store: K) -> Self {
 		let peers = RwLock::new(HashMap::new());
-		Self { peers, persister }
+		Self { peers, kv_store }
 	}
 
 	pub(crate) fn add_peer(&self, peer_info: PeerInfo) -> Result<(), Error> {
@@ -35,9 +34,14 @@ where
 
 		locked_peers.insert(peer_info.pubkey, peer_info);
 
-		self.persister
-			.persist(PEER_INFO_PERSISTENCE_KEY, &PeerInfoStorageSerWrapper(&*locked_peers))
+		let mut writer = self
+			.kv_store
+			.write(PEER_INFO_PERSISTENCE_NAMESPACE, PEER_INFO_PERSISTENCE_KEY)
 			.map_err(|_| Error::PersistenceFailed)?;
+		PeerInfoStorageSerWrapper(&*locked_peers)
+			.write(&mut writer)
+			.map_err(|_| Error::PersistenceFailed)?;
+		writer.commit().map_err(|_| Error::PersistenceFailed)?;
 
 		Ok(())
 	}
@@ -47,9 +51,14 @@ where
 
 		locked_peers.remove(peer_pubkey);
 
-		self.persister
-			.persist(PEER_INFO_PERSISTENCE_KEY, &PeerInfoStorageSerWrapper(&*locked_peers))
+		let mut writer = self
+			.kv_store
+			.write(PEER_INFO_PERSISTENCE_NAMESPACE, PEER_INFO_PERSISTENCE_KEY)
 			.map_err(|_| Error::PersistenceFailed)?;
+		PeerInfoStorageSerWrapper(&*locked_peers)
+			.write(&mut writer)
+			.map_err(|_| Error::PersistenceFailed)?;
+		writer.commit().map_err(|_| Error::PersistenceFailed)?;
 
 		Ok(())
 	}
@@ -65,15 +74,15 @@ where
 
 impl<K: Deref> ReadableArgs<K> for PeerInfoStorage<K>
 where
-	K::Target: KVStorePersister,
+	K::Target: KVStore,
 {
 	#[inline]
 	fn read<R: lightning::io::Read>(
-		reader: &mut R, persister: K,
+		reader: &mut R, kv_store: K,
 	) -> Result<Self, lightning::ln::msgs::DecodeError> {
 		let read_peers: PeerInfoStorageDeserWrapper = Readable::read(reader)?;
 		let peers: RwLock<HashMap<PublicKey, PeerInfo>> = RwLock::new(read_peers.0);
-		Ok(Self { peers, persister })
+		Ok(Self { peers, kv_store })
 	}
 }
 
@@ -181,15 +190,15 @@ impl TryFrom<String> for PeerInfo {
 #[cfg(test)]
 mod tests {
 	use super::*;
-	use crate::test::utils::TestPersister;
+	use crate::test::utils::TestStore;
 	use proptest::prelude::*;
 	use std::str::FromStr;
 	use std::sync::Arc;
 
 	#[test]
 	fn peer_info_persistence() {
-		let persister = Arc::new(TestPersister::new());
-		let peer_store = PeerInfoStorage::new(Arc::clone(&persister));
+		let store = Arc::new(TestStore::new());
+		let peer_store = PeerInfoStorage::new(Arc::clone(&store));
 
 		let pubkey = PublicKey::from_str(
 			"0276607124ebe6a6c9338517b6f485825b27c2dcc0b9fc2aa6a4c0df91194e5993",
@@ -198,18 +207,20 @@ mod tests {
 		let address: SocketAddr = "127.0.0.1:9738".parse().unwrap();
 		let expected_peer_info = PeerInfo { pubkey, address };
 		peer_store.add_peer(expected_peer_info.clone()).unwrap();
-		assert!(persister.get_and_clear_did_persist());
+		assert!(store.get_and_clear_did_persist());
 
 		// Check we can read back what we persisted.
-		let persisted_bytes = persister.get_persisted_bytes(PEER_INFO_PERSISTENCE_KEY).unwrap();
+		let persisted_bytes = store
+			.get_persisted_bytes(PEER_INFO_PERSISTENCE_NAMESPACE, PEER_INFO_PERSISTENCE_KEY)
+			.unwrap();
 		let deser_peer_store =
-			PeerInfoStorage::read(&mut &persisted_bytes[..], Arc::clone(&persister)).unwrap();
+			PeerInfoStorage::read(&mut &persisted_bytes[..], Arc::clone(&store)).unwrap();
 
 		let peers = deser_peer_store.list_peers();
 		assert_eq!(peers.len(), 1);
 		assert_eq!(peers[0], expected_peer_info);
 		assert_eq!(deser_peer_store.get_peer(&pubkey), Some(expected_peer_info));
-		assert!(!persister.get_and_clear_did_persist());
+		assert!(!store.get_and_clear_did_persist());
 	}
 
 	#[test]

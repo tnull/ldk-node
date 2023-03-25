@@ -36,11 +36,16 @@ pub(crate) const PAYMENT_INFO_PERSISTENCE_NAMESPACE: &str = "payments";
 /// Keys and namespaces are required to be valid ASCII strings and the empty namespace (`""`) is
 /// assumed to be valid namespace.
 pub trait KVStore {
-	/// Returns a [`Read`] for the given `key` from which [`Readable`]s may be read.
+	/// Returns a [`Read`] for the given `namespace` and `key` from which [`Readable`]s may be
+	/// read.
+	///
+	/// Returns an `Err` if the given `key` could not be found in the given `namespace`.
 	///
 	/// [`Readable`]: lightning::util::ser::Readable
 	fn read(&self, namespace: &str, key: &str) -> std::io::Result<Box<dyn Read>>;
 	/// Returns a [`TransactionalWrite`] for the given `key` to which [`Writeable`]s may be written.
+	///
+	/// Will create the given `namespace` if not already present in the store.
 	///
 	/// Note that [`TransactionalWrite::commit`] MUST be called to commit the written data, otherwise
 	/// the changes won't be persisted.
@@ -49,9 +54,11 @@ pub trait KVStore {
 	fn write(&self, namespace: &str, key: &str) -> std::io::Result<Box<dyn TransactionalWrite>>;
 	/// Removes any data that had previously been persisted under the given `key`.
 	///
-	/// Returns `true` if the key was present, and `false` otherwise.
+	/// Returns `true` if the `key` was present in the given `namespace`, and `false` otherwise.
 	fn remove(&self, namespace: &str, key: &str) -> std::io::Result<bool>;
 	/// Returns a list of keys that are stored under the given `namespace`.
+	///
+	/// Will return an empty list if the `namespace` is unknown.
 	fn list(&self, namespace: &str) -> std::io::Result<Vec<String>>;
 }
 
@@ -62,6 +69,32 @@ pub trait TransactionalWrite: Write {
 	/// Persist the previously made changes.
 	fn commit(&mut self) -> std::io::Result<()>;
 }
+
+// TODO: Use this generic impl once we have Node<K>
+//impl<T> KVStorePersister for T
+//where T: KVStore
+//{
+//	fn persist<W: Writeable>(&self, prefixed_key: &str, object: &W) -> lightning::io::Result<()> {
+//		let msg = format!("Could not persist data for key {}.", prefixed_key);
+//		let dest_file = PathBuf::from_str(prefixed_key).map_err(|_| {
+//			lightning::io::Error::new(lightning::io::ErrorKind::InvalidInput, msg.clone())
+//		})?;
+//
+//		let parent_directory = dest_file.parent().ok_or(lightning::io::Error::new(
+//			lightning::io::ErrorKind::InvalidInput,
+//			msg.clone(),
+//		))?;
+//		let namespace = parent_directory.display().to_string();
+//
+//		let dest_without_namespace = dest_file
+//			.strip_prefix(&namespace)
+//			.map_err(|_| lightning::io::Error::new(lightning::io::ErrorKind::InvalidInput, msg))?;
+//		let key = dest_without_namespace.display().to_string();
+//		let mut writer = self.write(&namespace, &key)?;
+//		object.write(&mut writer)?;
+//		Ok(writer.commit()?)
+//	}
+//}
 
 /// Provides an interface that allows a previously persisted key to be unpersisted.
 pub trait KVStoreUnpersister {

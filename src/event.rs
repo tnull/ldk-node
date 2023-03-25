@@ -3,7 +3,7 @@ use crate::{
 	PaymentInfo, PaymentInfoStorage, PaymentStatus, Wallet,
 };
 
-use crate::io::{KVStoreUnpersister, EVENT_QUEUE_PERSISTENCE_KEY};
+use crate::io::{KVStore, EVENT_QUEUE_PERSISTENCE_KEY, EVENT_QUEUE_PERSISTENCE_NAMESPACE};
 use crate::logger::{log_error, log_info, Logger};
 
 use lightning::chain::chaininterface::{BroadcasterInterface, ConfirmationTarget, FeeEstimator};
@@ -14,7 +14,6 @@ use lightning::util::errors::APIError;
 use lightning::util::events::Event as LdkEvent;
 use lightning::util::events::EventHandler as LdkEventHandler;
 use lightning::util::events::PaymentPurpose;
-use lightning::util::persist::KVStorePersister;
 use lightning::util::ser::{Readable, ReadableArgs, Writeable, Writer};
 
 use bitcoin::secp256k1::Secp256k1;
@@ -85,21 +84,21 @@ impl_writeable_tlv_based_enum!(Event,
 
 pub struct EventQueue<K: Deref>
 where
-	K::Target: KVStorePersister,
+	K::Target: KVStore,
 {
 	queue: Mutex<VecDeque<Event>>,
 	notifier: Condvar,
-	persister: K,
+	kv_store: K,
 }
 
 impl<K: Deref> EventQueue<K>
 where
-	K::Target: KVStorePersister,
+	K::Target: KVStore,
 {
-	pub(crate) fn new(persister: K) -> Self {
+	pub(crate) fn new(kv_store: K) -> Self {
 		let queue: Mutex<VecDeque<Event>> = Mutex::new(VecDeque::new());
 		let notifier = Condvar::new();
-		Self { queue, notifier, persister }
+		Self { queue, notifier, kv_store }
 	}
 
 	pub(crate) fn add_event(&self, event: Event) -> Result<(), Error> {
@@ -130,25 +129,30 @@ where
 	}
 
 	fn persist_queue(&self, locked_queue: &VecDeque<Event>) -> Result<(), Error> {
-		self.persister
-			.persist(EVENT_QUEUE_PERSISTENCE_KEY, &EventQueueSerWrapper(locked_queue))
+		let mut writer = self
+			.kv_store
+			.write(EVENT_QUEUE_PERSISTENCE_NAMESPACE, EVENT_QUEUE_PERSISTENCE_KEY)
 			.map_err(|_| Error::PersistenceFailed)?;
+		EventQueueSerWrapper(locked_queue)
+			.write(&mut writer)
+			.map_err(|_| Error::PersistenceFailed)?;
+		writer.commit().map_err(|_| Error::PersistenceFailed)?;
 		Ok(())
 	}
 }
 
 impl<K: Deref> ReadableArgs<K> for EventQueue<K>
 where
-	K::Target: KVStorePersister,
+	K::Target: KVStore,
 {
 	#[inline]
 	fn read<R: lightning::io::Read>(
-		reader: &mut R, persister: K,
+		reader: &mut R, kv_store: K,
 	) -> Result<Self, lightning::ln::msgs::DecodeError> {
 		let read_queue: EventQueueDeserWrapper = Readable::read(reader)?;
 		let queue: Mutex<VecDeque<Event>> = Mutex::new(read_queue.0);
 		let notifier = Condvar::new();
-		Ok(Self { queue, notifier, persister })
+		Ok(Self { queue, notifier, kv_store })
 	}
 }
 
@@ -181,7 +185,7 @@ impl Writeable for EventQueueSerWrapper<'_> {
 
 pub(crate) struct EventHandler<K: Deref + Clone, L: Deref>
 where
-	K::Target: KVStorePersister + KVStoreUnpersister,
+	K::Target: KVStore,
 	L::Target: Logger,
 {
 	wallet: Arc<Wallet<bdk::database::SqliteDatabase>>,
@@ -197,7 +201,7 @@ where
 
 impl<K: Deref + Clone, L: Deref> EventHandler<K, L>
 where
-	K::Target: KVStorePersister + KVStoreUnpersister,
+	K::Target: KVStore,
 	L::Target: Logger,
 {
 	pub fn new(
@@ -222,7 +226,7 @@ where
 
 impl<K: Deref + Clone, L: Deref> LdkEventHandler for EventHandler<K, L>
 where
-	K::Target: KVStorePersister + KVStoreUnpersister,
+	K::Target: KVStore,
 	L::Target: Logger,
 {
 	fn handle_event(&self, event: LdkEvent) {
@@ -551,33 +555,35 @@ where
 #[cfg(test)]
 mod tests {
 	use super::*;
-	use crate::test::utils::TestPersister;
+	use crate::test::utils::TestStore;
 
 	#[test]
 	fn event_queue_persistence() {
-		let persister = Arc::new(TestPersister::new());
-		let event_queue = EventQueue::new(Arc::clone(&persister));
+		let store = Arc::new(TestStore::new());
+		let event_queue = EventQueue::new(Arc::clone(&store));
 
 		let expected_event = Event::ChannelReady { channel_id: [23u8; 32], user_channel_id: 2323 };
 		event_queue.add_event(expected_event.clone()).unwrap();
-		assert!(persister.get_and_clear_did_persist());
+		assert!(store.get_and_clear_did_persist());
 
 		// Check we get the expected event and that it is returned until we mark it handled.
 		for _ in 0..5 {
 			assert_eq!(event_queue.next_event(), expected_event);
-			assert_eq!(false, persister.get_and_clear_did_persist());
+			assert_eq!(false, store.get_and_clear_did_persist());
 		}
 
 		// Check we can read back what we persisted.
-		let persisted_bytes = persister.get_persisted_bytes(EVENT_QUEUE_PERSISTENCE_KEY).unwrap();
+		let persisted_bytes = store
+			.get_persisted_bytes(EVENT_QUEUE_PERSISTENCE_NAMESPACE, EVENT_QUEUE_PERSISTENCE_KEY)
+			.unwrap();
 		let deser_event_queue =
-			EventQueue::read(&mut &persisted_bytes[..], Arc::clone(&persister)).unwrap();
+			EventQueue::read(&mut &persisted_bytes[..], Arc::clone(&store)).unwrap();
 		assert_eq!(deser_event_queue.next_event(), expected_event);
-		assert!(!persister.get_and_clear_did_persist());
+		assert!(!store.get_and_clear_did_persist());
 
 		// Check we persisted on `event_handled()`
 		event_queue.event_handled().unwrap();
 
-		assert!(persister.get_and_clear_did_persist());
+		assert!(store.get_and_clear_did_persist());
 	}
 }
