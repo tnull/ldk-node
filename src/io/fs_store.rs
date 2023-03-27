@@ -1,7 +1,7 @@
 #[cfg(target_os = "windows")]
 extern crate winapi;
 
-use super::{KVStore, KVStoreUnpersister, TransactionalWrite};
+use super::{KVStore, TransactionalWrite};
 
 use std::fs;
 use std::io::{BufReader, BufWriter, Read, Write};
@@ -90,7 +90,7 @@ impl KVStore for FilesystemStore {
 		}
 
 		if dest_file.is_file() {
-			return Err(std::io::Error::new(std::io::ErrorKind::Other, "Unpersisting key failed"));
+			return Err(std::io::Error::new(std::io::ErrorKind::Other, "Removing key failed"));
 		}
 
 		Ok(true)
@@ -253,20 +253,6 @@ impl KVStorePersister for FilesystemStore {
 		let mut writer = self.write(&namespace, &key)?;
 		object.write(&mut writer)?;
 		Ok(writer.commit()?)
-	}
-}
-
-impl KVStoreUnpersister for FilesystemStore {
-	fn unpersist(&self, key: &str) -> std::io::Result<bool> {
-		let msg = format!("Could not retrieve file for key {}.", key);
-		let dest_file = PathBuf::from_str(key)
-			.map_err(|_| lightning::io::Error::new(lightning::io::ErrorKind::InvalidInput, msg))?;
-		let msg = format!("Could not retrieve parent directory of {}.", dest_file.display());
-		let parent_directory = dest_file
-			.parent()
-			.ok_or(lightning::io::Error::new(lightning::io::ErrorKind::InvalidInput, msg))?;
-		let namespace = parent_directory.display().to_string();
-		self.remove(&namespace, key)
 	}
 }
 

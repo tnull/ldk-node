@@ -95,10 +95,3 @@ pub trait TransactionalWrite: Write {
 //		Ok(writer.commit()?)
 //	}
 //}
-
-/// Provides an interface that allows a previously persisted key to be unpersisted.
-pub trait KVStoreUnpersister {
-	/// Unpersist (i.e., remove) the writeable previously persisted under the provided key.
-	/// Returns `true` if the key was present, and `false` otherwise.
-	fn unpersist(&self, key: &str) -> std::io::Result<bool>;
-}
