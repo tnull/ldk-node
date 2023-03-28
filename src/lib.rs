@@ -503,32 +503,36 @@ impl Builder {
 
 		// Init payment info storage
 		let payment_store = match io::utils::read_payment_info(Arc::clone(&kv_store)) {
-			Ok(payments) => {
-				Arc::new(PaymentInfoStorage::from_payments(payments, Arc::clone(&kv_store)))
-			}
+			Ok(payments) => Arc::new(PaymentInfoStorage::from_payments(
+				payments,
+				Arc::clone(&kv_store),
+				Arc::clone(&logger),
+			)),
 			Err(e) => {
 				log_error!(logger, "Failed to read payment information: {}", e.to_string());
 				panic!("Failed to read payment information: {}", e.to_string());
 			}
 		};
 
-		let event_queue = match io::utils::read_event_queue(Arc::clone(&kv_store)) {
-			Ok(event_queue) => Arc::new(event_queue),
-			Err(e) => {
-				if e.kind() == std::io::ErrorKind::NotFound {
-					Arc::new(EventQueue::new(Arc::clone(&kv_store)))
-				} else {
-					log_error!(logger, "Failed to read event queue: {}", e.to_string());
-					panic!("Failed to read event queue: {}", e.to_string());
+		let event_queue =
+			match io::utils::read_event_queue(Arc::clone(&kv_store), Arc::clone(&logger)) {
+				Ok(event_queue) => Arc::new(event_queue),
+				Err(e) => {
+					if e.kind() == std::io::ErrorKind::NotFound {
+						Arc::new(EventQueue::new(Arc::clone(&kv_store), Arc::clone(&logger)))
+					} else {
+						log_error!(logger, "Failed to read event queue: {}", e.to_string());
+						panic!("Failed to read event queue: {}", e.to_string());
+					}
 				}
-			}
-		};
+			};
 
-		let peer_store = match io::utils::read_peer_info(Arc::clone(&kv_store)) {
+		let peer_store = match io::utils::read_peer_info(Arc::clone(&kv_store), Arc::clone(&logger))
+		{
 			Ok(peer_store) => Arc::new(peer_store),
 			Err(e) => {
 				if e.kind() == std::io::ErrorKind::NotFound {
-					Arc::new(PeerInfoStorage::new(Arc::clone(&kv_store)))
+					Arc::new(PeerInfoStorage::new(Arc::clone(&kv_store), Arc::clone(&logger)))
 				} else {
 					log_error!(logger, "Failed to read peer store: {}", e.to_string());
 					panic!("Failed to read peer store: {}", e.to_string());
@@ -576,7 +580,7 @@ pub struct Node {
 	config: Arc<Config>,
 	wallet: Arc<Wallet<bdk::database::SqliteDatabase>>,
 	tx_sync: Arc<EsploraSyncClient<Arc<FilesystemLogger>>>,
-	event_queue: Arc<EventQueue<Arc<FilesystemStore>>>,
+	event_queue: Arc<EventQueue<Arc<FilesystemStore>, Arc<FilesystemLogger>>>,
 	channel_manager: Arc<ChannelManager>,
 	chain_monitor: Arc<ChainMonitor>,
 	peer_manager: Arc<PeerManager>,
@@ -586,8 +590,8 @@ pub struct Node {
 	kv_store: Arc<FilesystemStore>,
 	logger: Arc<FilesystemLogger>,
 	scorer: Arc<Mutex<Scorer>>,
-	peer_store: Arc<PeerInfoStorage<Arc<FilesystemStore>>>,
-	payment_store: Arc<PaymentInfoStorage<Arc<FilesystemStore>>>,
+	peer_store: Arc<PeerInfoStorage<Arc<FilesystemStore>, Arc<FilesystemLogger>>>,
+	payment_store: Arc<PaymentInfoStorage<Arc<FilesystemStore>, Arc<FilesystemLogger>>>,
 }
 
 impl Node {

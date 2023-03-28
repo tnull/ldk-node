@@ -82,30 +82,33 @@ impl_writeable_tlv_based_enum!(Event,
 	};
 );
 
-pub struct EventQueue<K: Deref>
+pub struct EventQueue<K: Deref, L: Deref>
 where
 	K::Target: KVStore,
+	L::Target: Logger,
 {
 	queue: Mutex<VecDeque<Event>>,
 	notifier: Condvar,
 	kv_store: K,
+	logger: L,
 }
 
-impl<K: Deref> EventQueue<K>
+impl<K: Deref, L: Deref> EventQueue<K, L>
 where
 	K::Target: KVStore,
+	L::Target: Logger,
 {
-	pub(crate) fn new(kv_store: K) -> Self {
+	pub(crate) fn new(kv_store: K, logger: L) -> Self {
 		let queue: Mutex<VecDeque<Event>> = Mutex::new(VecDeque::new());
 		let notifier = Condvar::new();
-		Self { queue, notifier, kv_store }
+		Self { queue, notifier, kv_store, logger }
 	}
 
 	pub(crate) fn add_event(&self, event: Event) -> Result<(), Error> {
 		{
 			let mut locked_queue = self.queue.lock().unwrap();
 			locked_queue.push_back(event);
-			self.persist_queue(&locked_queue)?;
+			self.write_queue_and_commit(&locked_queue)?;
 		}
 
 		self.notifier.notify_one();
@@ -122,37 +125,64 @@ where
 		{
 			let mut locked_queue = self.queue.lock().unwrap();
 			locked_queue.pop_front();
-			self.persist_queue(&locked_queue)?;
+			self.write_queue_and_commit(&locked_queue)?;
 		}
 		self.notifier.notify_one();
 		Ok(())
 	}
 
-	fn persist_queue(&self, locked_queue: &VecDeque<Event>) -> Result<(), Error> {
+	fn write_queue_and_commit(&self, locked_queue: &VecDeque<Event>) -> Result<(), Error> {
 		let mut writer = self
 			.kv_store
 			.write(EVENT_QUEUE_PERSISTENCE_NAMESPACE, EVENT_QUEUE_PERSISTENCE_KEY)
-			.map_err(|_| Error::PersistenceFailed)?;
-		EventQueueSerWrapper(locked_queue)
-			.write(&mut writer)
-			.map_err(|_| Error::PersistenceFailed)?;
-		writer.commit().map_err(|_| Error::PersistenceFailed)?;
+			.map_err(|e| {
+				log_error!(
+					self.logger,
+					"Getting writer for key {}/{} failed due to: {}",
+					EVENT_QUEUE_PERSISTENCE_NAMESPACE,
+					EVENT_QUEUE_PERSISTENCE_KEY,
+					e
+				);
+				Error::PersistenceFailed
+			})?;
+		EventQueueSerWrapper(locked_queue).write(&mut writer).map_err(|e| {
+			log_error!(
+				self.logger,
+				"Writing event queue data to key {}/{} failed due to: {}",
+				EVENT_QUEUE_PERSISTENCE_NAMESPACE,
+				EVENT_QUEUE_PERSISTENCE_KEY,
+				e
+			);
+			Error::PersistenceFailed
+		})?;
+		writer.commit().map_err(|e| {
+			log_error!(
+				self.logger,
+				"Committing event queue data to key {}/{} failed due to: {}",
+				EVENT_QUEUE_PERSISTENCE_NAMESPACE,
+				EVENT_QUEUE_PERSISTENCE_KEY,
+				e
+			);
+			Error::PersistenceFailed
+		})?;
 		Ok(())
 	}
 }
 
-impl<K: Deref> ReadableArgs<K> for EventQueue<K>
+impl<K: Deref, L: Deref> ReadableArgs<(K, L)> for EventQueue<K, L>
 where
 	K::Target: KVStore,
+	L::Target: Logger,
 {
 	#[inline]
 	fn read<R: lightning::io::Read>(
-		reader: &mut R, kv_store: K,
+		reader: &mut R, args: (K, L),
 	) -> Result<Self, lightning::ln::msgs::DecodeError> {
+		let (kv_store, logger) = args;
 		let read_queue: EventQueueDeserWrapper = Readable::read(reader)?;
 		let queue: Mutex<VecDeque<Event>> = Mutex::new(read_queue.0);
 		let notifier = Condvar::new();
-		Ok(Self { queue, notifier, kv_store })
+		Ok(Self { queue, notifier, kv_store, logger })
 	}
 }
 
@@ -189,11 +219,11 @@ where
 	L::Target: Logger,
 {
 	wallet: Arc<Wallet<bdk::database::SqliteDatabase>>,
-	event_queue: Arc<EventQueue<K>>,
+	event_queue: Arc<EventQueue<K, L>>,
 	channel_manager: Arc<ChannelManager>,
 	network_graph: Arc<NetworkGraph>,
 	keys_manager: Arc<KeysManager>,
-	payment_store: Arc<PaymentInfoStorage<K>>,
+	payment_store: Arc<PaymentInfoStorage<K, L>>,
 	tokio_runtime: Arc<tokio::runtime::Runtime>,
 	logger: L,
 	_config: Arc<Config>,
@@ -205,9 +235,9 @@ where
 	L::Target: Logger,
 {
 	pub fn new(
-		wallet: Arc<Wallet<bdk::database::SqliteDatabase>>, event_queue: Arc<EventQueue<K>>,
+		wallet: Arc<Wallet<bdk::database::SqliteDatabase>>, event_queue: Arc<EventQueue<K, L>>,
 		channel_manager: Arc<ChannelManager>, network_graph: Arc<NetworkGraph>,
-		keys_manager: Arc<KeysManager>, payment_store: Arc<PaymentInfoStorage<K>>,
+		keys_manager: Arc<KeysManager>, payment_store: Arc<PaymentInfoStorage<K, L>>,
 		tokio_runtime: Arc<tokio::runtime::Runtime>, logger: L, _config: Arc<Config>,
 	) -> Self {
 		Self {
@@ -555,12 +585,13 @@ where
 #[cfg(test)]
 mod tests {
 	use super::*;
-	use crate::test::utils::TestStore;
+	use crate::test::utils::{TestLogger, TestStore};
 
 	#[test]
 	fn event_queue_persistence() {
 		let store = Arc::new(TestStore::new());
-		let event_queue = EventQueue::new(Arc::clone(&store));
+		let logger = Arc::new(TestLogger::new());
+		let event_queue = EventQueue::new(Arc::clone(&store), Arc::clone(&logger));
 
 		let expected_event = Event::ChannelReady { channel_id: [23u8; 32], user_channel_id: 2323 };
 		event_queue.add_event(expected_event.clone()).unwrap();
@@ -577,7 +608,7 @@ mod tests {
 			.get_persisted_bytes(EVENT_QUEUE_PERSISTENCE_NAMESPACE, EVENT_QUEUE_PERSISTENCE_KEY)
 			.unwrap();
 		let deser_event_queue =
-			EventQueue::read(&mut &persisted_bytes[..], Arc::clone(&store)).unwrap();
+			EventQueue::read(&mut &persisted_bytes[..], (Arc::clone(&store), logger)).unwrap();
 		assert_eq!(deser_event_queue.next_event(), expected_event);
 		assert!(!store.get_and_clear_did_persist());
 

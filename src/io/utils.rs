@@ -124,25 +124,31 @@ where
 }
 
 /// Read previously persisted events from the store.
-pub(crate) fn read_event_queue<K: Deref>(kv_store: K) -> Result<EventQueue<K>, std::io::Error>
+pub(crate) fn read_event_queue<K: Deref, L: Deref>(
+	kv_store: K, logger: L,
+) -> Result<EventQueue<K, L>, std::io::Error>
 where
 	K::Target: KVStore,
+	L::Target: Logger,
 {
 	let mut reader =
 		kv_store.read(EVENT_QUEUE_PERSISTENCE_NAMESPACE, EVENT_QUEUE_PERSISTENCE_KEY)?;
-	let event_queue = EventQueue::read(&mut reader, kv_store).map_err(|_| {
+	let event_queue = EventQueue::read(&mut reader, (kv_store, logger)).map_err(|_| {
 		std::io::Error::new(std::io::ErrorKind::InvalidData, "Failed to deserialize EventQueue")
 	})?;
 	Ok(event_queue)
 }
 
 /// Read previously persisted peer info from the store.
-pub(crate) fn read_peer_info<K: Deref>(kv_store: K) -> Result<PeerInfoStorage<K>, std::io::Error>
+pub(crate) fn read_peer_info<K: Deref, L: Deref>(
+	kv_store: K, logger: L,
+) -> Result<PeerInfoStorage<K, L>, std::io::Error>
 where
 	K::Target: KVStore,
+	L::Target: Logger,
 {
 	let mut reader = kv_store.read(PEER_INFO_PERSISTENCE_NAMESPACE, PEER_INFO_PERSISTENCE_KEY)?;
-	let peer_info = PeerInfoStorage::read(&mut reader, kv_store).map_err(|_| {
+	let peer_info = PeerInfoStorage::read(&mut reader, (kv_store, logger)).map_err(|_| {
 		std::io::Error::new(
 			std::io::ErrorKind::InvalidData,
 			"Failed to deserialize PeerInfoStorage",

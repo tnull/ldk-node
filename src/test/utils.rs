@@ -1,5 +1,6 @@
 use crate::io::{KVStore, TransactionalWrite};
 use crate::Config;
+use lightning::util::logger::{Level, Logger, Record};
 use lightning::util::persist::KVStorePersister;
 use lightning::util::ser::Writeable;
 
@@ -10,6 +11,8 @@ use electrsd::bitcoind::bitcoincore_rpc::bitcoincore_rpc_json::AddressType;
 use electrsd::{bitcoind, bitcoind::BitcoinD, ElectrsD};
 use electrum_client::ElectrumApi;
 
+use regex;
+
 use rand::distributions::Alphanumeric;
 use rand::{thread_rng, Rng};
 use std::collections::hash_map;
@@ -19,7 +22,7 @@ use std::io::{BufWriter, Cursor, Read, Write};
 use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 
 macro_rules! expect_event {
@@ -178,6 +181,90 @@ impl TransactionalWrite for TestWriter {
 		guard.clone_from(bytes_ref);
 		self.did_persist.store(true, Ordering::SeqCst);
 		Ok(())
+	}
+}
+
+// Copied over from upstream LDK
+#[allow(dead_code)]
+pub struct TestLogger {
+	level: Level,
+	pub(crate) id: String,
+	pub lines: Mutex<HashMap<(String, String), usize>>,
+}
+
+impl TestLogger {
+	#[allow(dead_code)]
+	pub fn new() -> TestLogger {
+		Self::with_id("".to_owned())
+	}
+
+	#[allow(dead_code)]
+	pub fn with_id(id: String) -> TestLogger {
+		TestLogger { level: Level::Trace, id, lines: Mutex::new(HashMap::new()) }
+	}
+
+	#[allow(dead_code)]
+	pub fn enable(&mut self, level: Level) {
+		self.level = level;
+	}
+
+	#[allow(dead_code)]
+	pub fn assert_log(&self, module: String, line: String, count: usize) {
+		let log_entries = self.lines.lock().unwrap();
+		assert_eq!(log_entries.get(&(module, line)), Some(&count));
+	}
+
+	/// Search for the number of occurrence of the logged lines which
+	/// 1. belongs to the specified module and
+	/// 2. contains `line` in it.
+	/// And asserts if the number of occurrences is the same with the given `count`
+	#[allow(dead_code)]
+	pub fn assert_log_contains(&self, module: &str, line: &str, count: usize) {
+		let log_entries = self.lines.lock().unwrap();
+		let l: usize = log_entries
+			.iter()
+			.filter(|&(&(ref m, ref l), _c)| m == module && l.contains(line))
+			.map(|(_, c)| c)
+			.sum();
+		assert_eq!(l, count)
+	}
+
+	/// Search for the number of occurrences of logged lines which
+	/// 1. belong to the specified module and
+	/// 2. match the given regex pattern.
+	/// Assert that the number of occurrences equals the given `count`
+	#[allow(dead_code)]
+	pub fn assert_log_regex(&self, module: &str, pattern: regex::Regex, count: usize) {
+		let log_entries = self.lines.lock().unwrap();
+		let l: usize = log_entries
+			.iter()
+			.filter(|&(&(ref m, ref l), _c)| m == module && pattern.is_match(&l))
+			.map(|(_, c)| c)
+			.sum();
+		assert_eq!(l, count)
+	}
+}
+
+impl Logger for TestLogger {
+	fn log(&self, record: &Record) {
+		*self
+			.lines
+			.lock()
+			.unwrap()
+			.entry((record.module_path.to_string(), format!("{}", record.args)))
+			.or_insert(0) += 1;
+		if record.level >= self.level {
+			#[cfg(feature = "std")]
+			println!(
+				"{:<5} {} [{} : {}, {}] {}",
+				record.level.to_string(),
+				self.id,
+				record.module_path,
+				record.file,
+				record.line,
+				record.args
+			);
+		}
 	}
 }
 

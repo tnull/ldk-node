@@ -1,5 +1,6 @@
 use crate::hex_utils;
 use crate::io::{KVStore, PEER_INFO_PERSISTENCE_KEY, PEER_INFO_PERSISTENCE_NAMESPACE};
+use crate::logger::{log_error, Logger};
 use crate::Error;
 
 use lightning::util::ser::{Readable, ReadableArgs, Writeable, Writer};
@@ -12,55 +13,38 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, ToSocketAddrs};
 use std::ops::Deref;
 use std::sync::RwLock;
 
-pub struct PeerInfoStorage<K: Deref>
+pub struct PeerInfoStorage<K: Deref, L: Deref>
 where
 	K::Target: KVStore,
+	L::Target: Logger,
 {
 	peers: RwLock<HashMap<PublicKey, PeerInfo>>,
 	kv_store: K,
+	logger: L,
 }
 
-impl<K: Deref> PeerInfoStorage<K>
+impl<K: Deref, L: Deref> PeerInfoStorage<K, L>
 where
 	K::Target: KVStore,
+	L::Target: Logger,
 {
-	pub(crate) fn new(kv_store: K) -> Self {
+	pub(crate) fn new(kv_store: K, logger: L) -> Self {
 		let peers = RwLock::new(HashMap::new());
-		Self { peers, kv_store }
+		Self { peers, kv_store, logger }
 	}
 
 	pub(crate) fn add_peer(&self, peer_info: PeerInfo) -> Result<(), Error> {
 		let mut locked_peers = self.peers.write().unwrap();
 
 		locked_peers.insert(peer_info.pubkey, peer_info);
-
-		let mut writer = self
-			.kv_store
-			.write(PEER_INFO_PERSISTENCE_NAMESPACE, PEER_INFO_PERSISTENCE_KEY)
-			.map_err(|_| Error::PersistenceFailed)?;
-		PeerInfoStorageSerWrapper(&*locked_peers)
-			.write(&mut writer)
-			.map_err(|_| Error::PersistenceFailed)?;
-		writer.commit().map_err(|_| Error::PersistenceFailed)?;
-
-		Ok(())
+		self.write_peers_and_commit(&*locked_peers)
 	}
 
 	pub(crate) fn remove_peer(&self, peer_pubkey: &PublicKey) -> Result<(), Error> {
 		let mut locked_peers = self.peers.write().unwrap();
 
 		locked_peers.remove(peer_pubkey);
-
-		let mut writer = self
-			.kv_store
-			.write(PEER_INFO_PERSISTENCE_NAMESPACE, PEER_INFO_PERSISTENCE_KEY)
-			.map_err(|_| Error::PersistenceFailed)?;
-		PeerInfoStorageSerWrapper(&*locked_peers)
-			.write(&mut writer)
-			.map_err(|_| Error::PersistenceFailed)?;
-		writer.commit().map_err(|_| Error::PersistenceFailed)?;
-
-		Ok(())
+		self.write_peers_and_commit(&*locked_peers)
 	}
 
 	pub(crate) fn list_peers(&self) -> Vec<PeerInfo> {
@@ -70,19 +54,60 @@ where
 	pub(crate) fn get_peer(&self, peer_pubkey: &PublicKey) -> Option<PeerInfo> {
 		self.peers.read().unwrap().get(peer_pubkey).cloned()
 	}
+
+	fn write_peers_and_commit(
+		&self, locked_peers: &HashMap<PublicKey, PeerInfo>,
+	) -> Result<(), Error> {
+		let mut writer = self
+			.kv_store
+			.write(PEER_INFO_PERSISTENCE_NAMESPACE, PEER_INFO_PERSISTENCE_KEY)
+			.map_err(|e| {
+				log_error!(
+					self.logger,
+					"Getting writer for key {}/{} failed due to: {}",
+					PEER_INFO_PERSISTENCE_NAMESPACE,
+					PEER_INFO_PERSISTENCE_KEY,
+					e
+				);
+				Error::PersistenceFailed
+			})?;
+		PeerInfoStorageSerWrapper(&*locked_peers).write(&mut writer).map_err(|e| {
+			log_error!(
+				self.logger,
+				"Writing peer data to key {}/{} failed due to: {}",
+				PEER_INFO_PERSISTENCE_NAMESPACE,
+				PEER_INFO_PERSISTENCE_KEY,
+				e
+			);
+			Error::PersistenceFailed
+		})?;
+		writer.commit().map_err(|e| {
+			log_error!(
+				self.logger,
+				"Committing peer data to key {}/{} failed due to: {}",
+				PEER_INFO_PERSISTENCE_NAMESPACE,
+				PEER_INFO_PERSISTENCE_KEY,
+				e
+			);
+			Error::PersistenceFailed
+		})?;
+		Ok(())
+	}
 }
 
-impl<K: Deref> ReadableArgs<K> for PeerInfoStorage<K>
+impl<K: Deref, L: Deref> ReadableArgs<(K, L)> for PeerInfoStorage<K, L>
 where
 	K::Target: KVStore,
+	L::Target: Logger,
 {
 	#[inline]
 	fn read<R: lightning::io::Read>(
-		reader: &mut R, kv_store: K,
+		reader: &mut R, args: (K, L),
 	) -> Result<Self, lightning::ln::msgs::DecodeError> {
+		let (kv_store, logger) = args;
 		let read_peers: PeerInfoStorageDeserWrapper = Readable::read(reader)?;
 		let peers: RwLock<HashMap<PublicKey, PeerInfo>> = RwLock::new(read_peers.0);
-		Ok(Self { peers, kv_store })
+		Ok(Self { peers, kv_store, logger })
 	}
 }
 
@@ -190,7 +215,7 @@ impl TryFrom<String> for PeerInfo {
 #[cfg(test)]
 mod tests {
 	use super::*;
-	use crate::test::utils::TestStore;
+	use crate::test::utils::{TestLogger, TestStore};
 	use proptest::prelude::*;
 	use std::str::FromStr;
 	use std::sync::Arc;
@@ -198,7 +223,8 @@ mod tests {
 	#[test]
 	fn peer_info_persistence() {
 		let store = Arc::new(TestStore::new());
-		let peer_store = PeerInfoStorage::new(Arc::clone(&store));
+		let logger = Arc::new(TestLogger::new());
+		let peer_store = PeerInfoStorage::new(Arc::clone(&store), Arc::clone(&logger));
 
 		let pubkey = PublicKey::from_str(
 			"0276607124ebe6a6c9338517b6f485825b27c2dcc0b9fc2aa6a4c0df91194e5993",
@@ -214,7 +240,7 @@ mod tests {
 			.get_persisted_bytes(PEER_INFO_PERSISTENCE_NAMESPACE, PEER_INFO_PERSISTENCE_KEY)
 			.unwrap();
 		let deser_peer_store =
-			PeerInfoStorage::read(&mut &persisted_bytes[..], Arc::clone(&store)).unwrap();
+			PeerInfoStorage::read(&mut &persisted_bytes[..], (Arc::clone(&store), logger)).unwrap();
 
 		let peers = deser_peer_store.list_peers();
 		assert_eq!(peers.len(), 1);
