@@ -9,7 +9,6 @@ use lightning::chain::keysinterface::{EntropySource, SignerProvider};
 use lightning::routing::gossip::NetworkGraph;
 use lightning::routing::scoring::{ProbabilisticScorer, ProbabilisticScoringParameters};
 use lightning::util::logger::Logger;
-use lightning::util::persist::KVStorePersister;
 use lightning::util::ser::{Readable, ReadableArgs};
 
 use bitcoin::hash_types::{BlockHash, Txid};
@@ -90,6 +89,7 @@ where
 	}
 	Ok(res)
 }
+
 /// Read a previously persisted [`NetworkGraph`] from the store.
 pub(crate) fn read_network_graph<K: Deref, L: Deref>(
 	kv_store: K, logger: L,
@@ -105,6 +105,7 @@ where
 	})?;
 	Ok(graph)
 }
+
 /// Read a previously persisted [`Scorer`] from the store.
 pub(crate) fn read_scorer<K: Deref, G: Deref<Target = NetworkGraph<L>>, L: Deref>(
 	kv_store: K, network_graph: G, logger: L,
@@ -121,10 +122,11 @@ where
 	})?;
 	Ok(scorer)
 }
+
 /// Read previously persisted events from the store.
 pub(crate) fn read_event_queue<K: Deref>(kv_store: K) -> Result<EventQueue<K>, std::io::Error>
 where
-	K::Target: KVStore + KVStorePersister,
+	K::Target: KVStore,
 {
 	let mut reader =
 		kv_store.read(EVENT_QUEUE_PERSISTENCE_NAMESPACE, EVENT_QUEUE_PERSISTENCE_KEY)?;
@@ -133,10 +135,11 @@ where
 	})?;
 	Ok(event_queue)
 }
+
 /// Read previously persisted peer info from the store.
 pub(crate) fn read_peer_info<K: Deref>(kv_store: K) -> Result<PeerInfoStorage<K>, std::io::Error>
 where
-	K::Target: KVStore + KVStorePersister,
+	K::Target: KVStore,
 {
 	let mut reader = kv_store.read(PEER_INFO_PERSISTENCE_NAMESPACE, PEER_INFO_PERSISTENCE_KEY)?;
 	let peer_info = PeerInfoStorage::read(&mut reader, kv_store).map_err(|_| {
@@ -147,10 +150,11 @@ where
 	})?;
 	Ok(peer_info)
 }
+
 /// Read previously persisted payments information from the store.
 pub(crate) fn read_payment_info<K: Deref>(kv_store: K) -> Result<Vec<PaymentInfo>, std::io::Error>
 where
-	K::Target: KVStore + KVStorePersister,
+	K::Target: KVStore,
 {
 	let mut res = Vec::new();
 
