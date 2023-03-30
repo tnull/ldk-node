@@ -33,7 +33,11 @@ interface Node {
 	[Throws=NodeError]
 	u64 total_onchain_balance_sats();
 	[Throws=NodeError]
-	void connect_open_channel([ByRef]PublicKey pubkey, [ByRef]SocketAddr address, u64 channel_amount_sats, boolean announce_channel);
+	void connect([ByRef]PublicKey node_id, [ByRef]SocketAddr address, boolean permanently);
+	[Throws=NodeError]
+	void disconnect([ByRef]PublicKey node_id);
+	[Throws=NodeError]
+	void connect_open_channel([ByRef]PublicKey node_id, [ByRef]SocketAddr address, u64 channel_amount_sats, boolean announce_channel);
 	[Throws=NodeError]
 	void close_channel([ByRef]ChannelId channel_id, [ByRef]PublicKey counterparty_node_id);
 	[Throws=NodeError]
