@@ -33,8 +33,9 @@ fn channel_full_cycle() {
 	assert_eq!(node_b.on_chain_balance().unwrap().get_spendable(), 100000);
 
 	println!("\nA -- connect_open_channel -> B");
-	let node_b_addr = format!("{}@{}", node_b.node_id(), node_b.listening_address().unwrap());
-	node_a.connect_open_channel(&node_b_addr, 50000, true).unwrap();
+	node_a
+		.connect_open_channel(&node_b.node_id(), &node_b.listening_address().unwrap(), 50000, true)
+		.unwrap();
 
 	let funding_txo = loop {
 		let details = node_a.list_channels();
@@ -76,7 +77,7 @@ fn channel_full_cycle() {
 	let invoice = node_b.receive_payment(invoice_amount, &"asdf", 9217).unwrap();
 
 	println!("\nA send_payment");
-	let payment_hash = node_a.send_payment(invoice.clone()).unwrap();
+	let payment_hash = node_a.send_payment(&invoice).unwrap();
 
 	expect_event!(node_a, PaymentSuccessful);
 	expect_event!(node_b, PaymentReceived);
@@ -88,7 +89,7 @@ fn channel_full_cycle() {
 	assert_eq!(node_b.payment_info(&payment_hash).unwrap().amount_msat, Some(invoice_amount));
 
 	// Assert we fail duplicate outbound payments.
-	assert_eq!(Err(Error::NonUniquePaymentHash), node_a.send_payment(invoice));
+	assert_eq!(Err(Error::NonUniquePaymentHash), node_a.send_payment(&invoice));
 
 	// Test under-/overpayment
 	let invoice_amount = 1000000;
@@ -97,12 +98,12 @@ fn channel_full_cycle() {
 	let underpaid_amount = invoice_amount - 1;
 	assert_eq!(
 		Err(Error::InvalidAmount),
-		node_a.send_payment_using_amount(invoice, underpaid_amount)
+		node_a.send_payment_using_amount(&invoice, underpaid_amount)
 	);
 
 	let invoice = node_b.receive_payment(invoice_amount, &"asdf", 9217).unwrap();
 	let overpaid_amount = invoice_amount + 100;
-	let payment_hash = node_a.send_payment_using_amount(invoice, overpaid_amount).unwrap();
+	let payment_hash = node_a.send_payment_using_amount(&invoice, overpaid_amount).unwrap();
 	expect_event!(node_a, PaymentSuccessful);
 	let received_amount = match node_b.next_event() {
 		ref e @ Event::PaymentReceived { amount_msat, .. } => {
@@ -125,9 +126,9 @@ fn channel_full_cycle() {
 	// Test "zero-amount" invoice payment
 	let variable_amount_invoice = node_b.receive_variable_amount_payment(&"asdf", 9217).unwrap();
 	let determined_amount = 1234567;
-	assert_eq!(Err(Error::InvalidInvoice), node_a.send_payment(variable_amount_invoice.clone()));
+	assert_eq!(Err(Error::InvalidInvoice), node_a.send_payment(&variable_amount_invoice));
 	let payment_hash =
-		node_a.send_payment_using_amount(variable_amount_invoice, determined_amount).unwrap();
+		node_a.send_payment_using_amount(&variable_amount_invoice, determined_amount).unwrap();
 
 	expect_event!(node_a, PaymentSuccessful);
 	let received_amount = match node_b.next_event() {
@@ -195,10 +196,14 @@ fn channel_open_fails_when_funds_insufficient() {
 	assert_eq!(node_b.on_chain_balance().unwrap().get_spendable(), 100000);
 
 	println!("\nA -- connect_open_channel -> B");
-	let node_b_addr = format!("{}@{}", node_b.node_id(), node_b.listening_address().unwrap());
 	assert_eq!(
 		Err(Error::InsufficientFunds),
-		node_a.connect_open_channel(&node_b_addr, 120000, true)
+		node_a.connect_open_channel(
+			&node_b.node_id(),
+			&node_b.listening_address().unwrap(),
+			120000,
+			true
+		)
 	);
 }
 
