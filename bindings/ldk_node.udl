@@ -36,11 +36,11 @@ interface Node {
 	[Throws=NodeError]
 	u64 total_onchain_balance_sats();
 	[Throws=NodeError]
-	void connect(PublicKey node_id, SocketAddr address, boolean permanently);
+	void connect(PublicKey node_id, NetAddress address, boolean permanently);
 	[Throws=NodeError]
 	void disconnect(PublicKey node_id);
 	[Throws=NodeError]
-	void connect_open_channel(PublicKey node_id, SocketAddr address, u64 channel_amount_sats, u64? push_to_counterparty_msat, boolean announce_channel);
+	void connect_open_channel(PublicKey node_id, NetAddress address, u64 channel_amount_sats, u64? push_to_counterparty_msat, boolean announce_channel);
 	[Throws=NodeError]
 	void close_channel([ByRef]ChannelId channel_id, PublicKey counterparty_node_id);
 	[Throws=NodeError]
@@ -71,6 +71,7 @@ enum NodeError {
 	"InvoiceCreationFailed",
 	"PaymentFailed",
 	"PeerInfoParseFailed",
+	"PeerInfoNotFound",
 	"ChannelCreationFailed",
 	"ChannelClosingFailed",
 	"PersistenceFailed",
@@ -147,7 +148,7 @@ dictionary ChannelDetails {
 
 dictionary PeerDetails {
 	PublicKey node_id;
-	SocketAddr address;
+	NetAddress address;
 	boolean is_connected;
 };
 
@@ -156,6 +157,9 @@ typedef string Txid;
 
 [Custom]
 typedef string SocketAddr;
+
+[Custom]
+typedef string NetAddress;
 
 [Custom]
 typedef string PublicKey;

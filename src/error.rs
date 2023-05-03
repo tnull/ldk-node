@@ -17,6 +17,8 @@ pub enum Error {
 	PaymentFailed,
 	/// A given peer info could not be parsed.
 	PeerInfoParseFailed,
+	/// A given peer info could not be found.
+	PeerInfoNotFound,
 	/// A channel could not be opened.
 	ChannelCreationFailed,
 	/// A channel could not be closed.
@@ -67,6 +69,7 @@ impl fmt::Display for Error {
 			Self::InvoiceCreationFailed => write!(f, "Failed to create invoice."),
 			Self::PaymentFailed => write!(f, "Failed to send the given payment."),
 			Self::PeerInfoParseFailed => write!(f, "Failed to parse the given peer information."),
+			Self::PeerInfoNotFound => write!(f, "Failed to resolve the given peer information."),
 			Self::ChannelCreationFailed => write!(f, "Failed to create channel."),
 			Self::ChannelClosingFailed => write!(f, "Failed to close channel."),
 			Self::PersistenceFailed => write!(f, "Failed to persist data."),
