@@ -405,27 +405,11 @@ pub struct PeerDetails {
 	pub is_connected: bool,
 }
 
-impl UniffiCustomTypeConverter for SocketAddr {
-	type Builtin = String;
-
-	fn into_custom(val: Self::Builtin) -> uniffi::Result<Self> {
-		if let Ok(addr) = SocketAddr::from_str(&val) {
-			return Ok(addr);
-		}
-
-		Err(Error::InvalidPublicKey.into())
-	}
-
-	fn from_custom(obj: Self) -> Self::Builtin {
-		obj.to_string()
-	}
-}
-
 /// The network address of a Lightning node.
 ///
 /// Currently only IPv4, IPv6, and DNS hostnames are supported.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct NetAddress(LdkNetAddress);
+pub struct NetAddress(pub LdkNetAddress);
 
 impl Display for NetAddress {
 	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

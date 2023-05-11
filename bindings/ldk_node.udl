@@ -5,7 +5,7 @@ dictionary Config {
 	string storage_dir_path;
 	string esplora_server_url;
 	Network network;
-	SocketAddr? listening_address;
+	NetAddress? listening_address;
 	u32 default_cltv_expiry_delta;
 };
 
@@ -24,7 +24,7 @@ interface Node {
 	Event next_event();
 	void event_handled();
 	PublicKey node_id();
-	SocketAddr? listening_address();
+	NetAddress? listening_address();
 	[Throws=NodeError]
 	Address new_funding_address();
 	[Throws=NodeError]
@@ -154,9 +154,6 @@ dictionary PeerDetails {
 
 [Custom]
 typedef string Txid;
-
-[Custom]
-typedef string SocketAddr;
 
 [Custom]
 typedef string NetAddress;
