@@ -169,8 +169,11 @@ const BDK_CLIENT_CONCURRENCY: u8 = 8;
 // The timeout after which we abandon retrying failed payments.
 const LDK_PAYMENT_RETRY_TIMEOUT: Duration = Duration::from_secs(10);
 
-// The time in between peer reconnection attempts.
+// The time in-between peer reconnection attempts.
 const PEER_RECONNECTION_INTERVAL: Duration = Duration::from_secs(10);
+
+// The time in-between node announcement broadcast attempts.
+const NODE_ANN_BCAST_INTERVAL: Duration = Duration::from_secs(60 * 10);
 
 // The length in bytes of our wallets' keys seed.
 const WALLET_KEYS_SEED_LEN: usize = 64;
@@ -852,10 +855,13 @@ impl Node {
 		let stop_connect = Arc::clone(&stop_running);
 		runtime.spawn(async move {
 			let mut interval = tokio::time::interval(PEER_RECONNECTION_INTERVAL);
+			interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 			loop {
 				if stop_connect.load(Ordering::Acquire) {
 					return;
 				}
+
+				interval.tick().await;
 				let pm_peers = connect_pm
 					.get_peer_node_ids()
 					.iter()
@@ -877,7 +883,33 @@ impl Node {
 						.await;
 					}
 				}
-				interval.tick().await;
+			}
+		});
+
+		// Regularly broadcast node announcements.
+		let bcast_cm = Arc::clone(&self.channel_manager);
+		let bcast_pm = Arc::clone(&self.peer_manager);
+		let bcast_config = Arc::clone(&self.config);
+		let stop_bcast = Arc::clone(&stop_running);
+		runtime.spawn(async move {
+			let mut interval = tokio::time::interval(NODE_ANN_BCAST_INTERVAL);
+			loop {
+				if stop_bcast.load(Ordering::Acquire) {
+					return;
+				}
+
+				if bcast_cm.list_channels().iter().any(|chan| chan.is_public) {
+					interval.tick().await;
+
+					while bcast_pm.get_peer_node_ids().is_empty() {
+						// Sleep a bit and retry if we don't have any peers yet.
+						tokio::time::sleep(Duration::from_secs(5)).await;
+					}
+
+					let addresses =
+						bcast_config.listening_address.iter().cloned().map(|a| a.0).collect();
+					bcast_pm.broadcast_node_announcement([0; 3], [0; 32], addresses);
+				}
 			}
 		});
 
