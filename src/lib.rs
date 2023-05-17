@@ -898,18 +898,24 @@ impl Node {
 					return;
 				}
 
-				if bcast_cm.list_channels().iter().any(|chan| chan.is_public) {
-					interval.tick().await;
-
-					while bcast_pm.get_peer_node_ids().is_empty() {
-						// Sleep a bit and retry if we don't have any peers yet.
-						tokio::time::sleep(Duration::from_secs(5)).await;
-					}
-
-					let addresses =
-						bcast_config.listening_address.iter().cloned().map(|a| a.0).collect();
-					bcast_pm.broadcast_node_announcement([0; 3], [0; 32], addresses);
+				if !bcast_cm.list_channels().iter().any(|chan| chan.is_public) {
+					continue;
 				}
+
+				interval.tick().await;
+
+				if !bcast_cm.list_channels().iter().any(|chan| chan.is_public) {
+					continue;
+				}
+
+				while bcast_pm.get_peer_node_ids().is_empty() {
+					// Sleep a bit and retry if we don't have any peers yet.
+					tokio::time::sleep(Duration::from_secs(5)).await;
+				}
+
+				let addresses =
+					bcast_config.listening_address.iter().cloned().map(|a| a.0).collect();
+				bcast_pm.broadcast_node_announcement([0; 3], [0; 32], addresses);
 			}
 		});
 
