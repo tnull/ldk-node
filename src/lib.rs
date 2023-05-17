@@ -173,7 +173,7 @@ const LDK_PAYMENT_RETRY_TIMEOUT: Duration = Duration::from_secs(10);
 const PEER_RECONNECTION_INTERVAL: Duration = Duration::from_secs(10);
 
 // The time in-between node announcement broadcast attempts.
-const NODE_ANN_BCAST_INTERVAL: Duration = Duration::from_secs(60 * 10);
+const NODE_ANN_BCAST_INTERVAL: Duration = Duration::from_secs(60 * 60);
 
 // The length in bytes of our wallets' keys seed.
 const WALLET_KEYS_SEED_LEN: usize = 64;
@@ -898,15 +898,11 @@ impl Node {
 					return;
 				}
 
-				if !bcast_cm.list_channels().iter().any(|chan| chan.is_public) {
-					continue;
-				}
+				if !bcast_cm.list_channels().iter().any(|chan| chan.is_public) { continue; }
 
 				interval.tick().await;
 
-				if !bcast_cm.list_channels().iter().any(|chan| chan.is_public) {
-					continue;
-				}
+				if !bcast_cm.list_channels().iter().any(|chan| chan.is_public) { continue; }
 
 				while bcast_pm.get_peer_node_ids().is_empty() {
 					// Sleep a bit and retry if we don't have any peers yet.
