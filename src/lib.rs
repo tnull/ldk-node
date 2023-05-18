@@ -172,6 +172,9 @@ const LDK_PAYMENT_RETRY_TIMEOUT: Duration = Duration::from_secs(10);
 // The time in-between peer reconnection attempts.
 const PEER_RECONNECTION_INTERVAL: Duration = Duration::from_secs(10);
 
+// The time in-between RGS sync attempts.
+const RGS_SYNC_INTERVAL: Duration = Duration::from_secs(60 * 60);
+
 // The time in-between node announcement broadcast attempts.
 const NODE_ANN_BCAST_INTERVAL: Duration = Duration::from_secs(60 * 60);
 
@@ -550,7 +553,7 @@ impl Builder {
 				));
 
 				// Reset the RGS sync timestamp in case we somehow switch gossip sources
-				io::utils::write_rgs_latest_sync_timestamp(
+				io::utils::write_latest_rgs_sync_timestamp(
 					0,
 					Arc::clone(&kv_store),
 					Arc::clone(&logger),
@@ -560,7 +563,7 @@ impl Builder {
 			}
 			GossipSourceConfig::RapidGossipSync(rgs_server) => {
 				let latest_sync_timestamp =
-					io::utils::read_rgs_latest_sync_timestamp(Arc::clone(&kv_store)).unwrap_or(0);
+					io::utils::read_latest_rgs_sync_timestamp(Arc::clone(&kv_store)).unwrap_or(0);
 				Arc::new(GossipSource::new_rgs(
 					rgs_server.clone(),
 					latest_sync_timestamp,
@@ -756,38 +759,39 @@ impl Node {
 			let gossip_source = Arc::clone(&self.gossip_source);
 			let gossip_sync_store = Arc::clone(&self.kv_store);
 			let gossip_sync_logger = Arc::clone(&self.logger);
-			let stop_gossip_sync = Arc::clone(&stop_running);
+			let mut stop_gossip_sync = self.stop_receiver.clone();
 			runtime.spawn(async move {
+				let mut interval = tokio::time::interval(RGS_SYNC_INTERVAL);
 				loop {
-					let gossip_sync_logger = Arc::clone(&gossip_sync_logger);
-					let stop_gossip_sync = Arc::clone(&stop_gossip_sync);
-					if stop_gossip_sync.load(Ordering::Acquire) {
-						return;
-					}
-
-					let now = Instant::now();
-					match gossip_source.update_rgs_snapshot().await {
-						Ok(updated_timestamp) => {
-							log_info!(
-								gossip_sync_logger,
-								"Background sync of RGS gossip data finished in {}ms.",
-								now.elapsed().as_millis()
-							);
-							io::utils::write_rgs_latest_sync_timestamp(
-								updated_timestamp,
-								Arc::clone(&gossip_sync_store),
-								Arc::clone(&gossip_sync_logger),
-							)
-							.expect("Persistence failed");
+					tokio::select! {
+						_ = stop_gossip_sync.changed() => {
+							return;
 						}
-						Err(e) => log_error!(
-							gossip_sync_logger,
-							"Background sync of RGS gossip data failed: {}",
-							e
-						),
+						_ = interval.tick() => {
+							let gossip_sync_logger = Arc::clone(&gossip_sync_logger);
+							let now = Instant::now();
+							match gossip_source.update_rgs_snapshot().await {
+								Ok(updated_timestamp) => {
+									log_info!(
+										gossip_sync_logger,
+										"Background sync of RGS gossip data finished in {}ms.",
+										now.elapsed().as_millis()
+										);
+									io::utils::write_latest_rgs_sync_timestamp(
+										updated_timestamp,
+										Arc::clone(&gossip_sync_store),
+										Arc::clone(&gossip_sync_logger),
+										)
+										.expect("Persistence failed");
+								}
+								Err(e) => log_error!(
+									gossip_sync_logger,
+									"Background sync of RGS gossip data failed: {}",
+									e
+									),
+							}
+						}
 					}
-
-					tokio::time::sleep(Duration::from_secs(60 * 60)).await;
 				}
 			});
 		}
