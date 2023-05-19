@@ -113,7 +113,7 @@ use types::{
 pub use types::{ChannelDetails, ChannelId, PeerDetails, UserChannelId};
 use wallet::Wallet;
 
-use logger::{log_error, log_info, FilesystemLogger, Logger};
+use logger::{log_error, log_info, log_trace, FilesystemLogger, Logger};
 
 use lightning::chain::keysinterface::EntropySource;
 use lightning::chain::{chainmonitor, BestBlock, Confirm, Watch};
@@ -166,8 +166,14 @@ const BDK_CLIENT_STOP_GAP: usize = 20;
 // The number of concurrent requests made against the API provider.
 const BDK_CLIENT_CONCURRENCY: u8 = 8;
 
+// The default time in-between LDK wallet sync attempts.
+const DEFAULT_BDK_WALLET_SYNC_INTERVAL_SECS: u64 = 60;
+
 // The timeout after which we abandon retrying failed payments.
 const LDK_PAYMENT_RETRY_TIMEOUT: Duration = Duration::from_secs(10);
+
+// The default time in-between LDK wallet sync attempts.
+const DEFAULT_LDK_WALLET_SYNC_INTERVAL_SECS: u64 = 20;
 
 // The time in-between peer reconnection attempts.
 const PEER_RECONNECTION_INTERVAL: Duration = Duration::from_secs(10);
@@ -194,6 +200,14 @@ pub struct Config {
 	pub listening_address: Option<NetAddress>,
 	/// The default CLTV expiry delta to be used for payments.
 	pub default_cltv_expiry_delta: u32,
+	/// The time in-between background sync attempts of the onchain wallet, in seconds.
+	///
+	/// **Note:** A minimum of 10 seconds is always enforced.
+	pub onchain_wallet_sync_interval_secs: u64,
+	/// The time in-between background sync attempts of the LDK wallet, in seconds.
+	///
+	/// **Note:** A minimum of 10 seconds is always enforced.
+	pub wallet_sync_interval_secs: u64,
 }
 
 impl Default for Config {
@@ -204,6 +218,8 @@ impl Default for Config {
 			network: Network::Regtest,
 			listening_address: Some("0.0.0.0:9735".parse().unwrap()),
 			default_cltv_expiry_delta: 144,
+			onchain_wallet_sync_interval_secs: DEFAULT_BDK_WALLET_SYNC_INTERVAL_SECS,
+			wallet_sync_interval_secs: DEFAULT_LDK_WALLET_SYNC_INTERVAL_SECS,
 		}
 	}
 }
@@ -702,31 +718,38 @@ impl Node {
 
 		let runtime = tokio::runtime::Builder::new_multi_thread().enable_all().build().unwrap();
 
-		let event_handler = Arc::new(EventHandler::new(
-			Arc::clone(&self.wallet),
-			Arc::clone(&self.event_queue),
-			Arc::clone(&self.channel_manager),
-			Arc::clone(&self.network_graph),
-			Arc::clone(&self.keys_manager),
-			Arc::clone(&self.payment_store),
-			Arc::clone(&self.runtime),
-			Arc::clone(&self.logger),
-			Arc::clone(&self.config),
-		));
-
 		// Setup wallet sync
 		let wallet = Arc::clone(&self.wallet);
-		let tx_sync = Arc::clone(&self.tx_sync);
-		let sync_cman = Arc::clone(&self.channel_manager);
-		let sync_cmon = Arc::clone(&self.chain_monitor);
 		let sync_logger = Arc::clone(&self.logger);
 		let mut stop_sync = self.stop_receiver.clone();
 
+		runtime.block_on(async move {
+			let now = Instant::now();
+			match wallet.sync().await {
+				Ok(()) => {
+					log_info!(
+						sync_logger,
+						"Initial sync of on-chain wallet finished in {}ms.",
+						now.elapsed().as_millis()
+					);
+					Ok(())
+				}
+				Err(e) => {
+					log_error!(sync_logger, "Intial sync of on-chain wallet failed: {}", e,);
+					Err(e)
+				}
+			}
+		})?;
+
+		let sync_logger = Arc::clone(&self.logger);
+		let wallet = Arc::clone(&self.wallet);
 		std::thread::spawn(move || {
 			tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap().block_on(
 				async move {
-					let mut interval = tokio::time::interval(Duration::from_secs(30));
+					let interval_secs = DEFAULT_BDK_WALLET_SYNC_INTERVAL_SECS.max(10);
+					let mut interval = tokio::time::interval(Duration::from_secs(interval_secs));
 					interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+					interval.reset();
 					loop {
 						let now = Instant::now();
 						tokio::select! {
@@ -735,7 +758,7 @@ impl Node {
 							}
 							_ = interval.tick() => {
 								match wallet.sync().await {
-									Ok(()) => log_info!(
+									Ok(()) => log_trace!(
 										sync_logger,
 										"Background sync of on-chain wallet finished in {}ms.",
 										now.elapsed().as_millis()
@@ -755,6 +778,68 @@ impl Node {
 			);
 		});
 
+		let tx_sync = Arc::clone(&self.tx_sync);
+		let sync_cman = Arc::clone(&self.channel_manager);
+		let sync_cmon = Arc::clone(&self.chain_monitor);
+		let sync_logger = Arc::clone(&self.logger);
+		runtime.block_on(async move {
+			let now = Instant::now();
+			let confirmables = vec![
+				&*sync_cman as &(dyn Confirm + Sync + Send),
+				&*sync_cmon as &(dyn Confirm + Sync + Send),
+			];
+			match tx_sync.sync(confirmables).await {
+				Ok(()) => {
+					log_info!(
+						sync_logger,
+						"Initial sync of Lightning wallet finished in {}ms.",
+						now.elapsed().as_millis()
+					);
+					Ok(())
+				}
+				Err(e) => {
+					log_error!(sync_logger, "Initial sync of Lightning wallet failed: {}", e);
+					Err(e)
+				}
+			}
+		})?;
+
+		let tx_sync = Arc::clone(&self.tx_sync);
+		let sync_cman = Arc::clone(&self.channel_manager);
+		let sync_cmon = Arc::clone(&self.chain_monitor);
+		let sync_logger = Arc::clone(&self.logger);
+		let mut stop_sync = self.stop_receiver.clone();
+		runtime.spawn(async move {
+			let interval_secs = DEFAULT_LDK_WALLET_SYNC_INTERVAL_SECS.max(10);
+			let mut interval = tokio::time::interval(Duration::from_secs(interval_secs));
+			interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+			interval.reset();
+			loop {
+				let now = Instant::now();
+				tokio::select! {
+					_ = stop_sync.changed() => {
+						return;
+					}
+					_ = interval.tick() => {
+						let confirmables = vec![
+							&*sync_cman as &(dyn Confirm + Sync + Send),
+							&*sync_cmon as &(dyn Confirm + Sync + Send),
+						];
+						match tx_sync.sync(confirmables).await {
+							Ok(()) => log_trace!(
+								sync_logger,
+								"Background sync of Lightning wallet finished in {}ms.",
+								now.elapsed().as_millis()
+								),
+							Err(e) => {
+								log_error!(sync_logger, "Background sync of Lightning wallet failed: {}", e)
+							}
+						}
+					}
+				}
+			}
+		});
+
 		if self.gossip_source.is_rgs() {
 			let gossip_source = Arc::clone(&self.gossip_source);
 			let gossip_sync_store = Arc::clone(&self.kv_store);
@@ -772,7 +857,7 @@ impl Node {
 							let now = Instant::now();
 							match gossip_source.update_rgs_snapshot().await {
 								Ok(updated_timestamp) => {
-									log_info!(
+									log_trace!(
 										gossip_sync_logger,
 										"Background sync of RGS gossip data finished in {}ms.",
 										now.elapsed().as_millis()
@@ -795,37 +880,6 @@ impl Node {
 				}
 			});
 		}
-
-		let sync_logger = Arc::clone(&self.logger);
-		let mut stop_sync = self.stop_receiver.clone();
-		runtime.spawn(async move {
-			let mut interval = tokio::time::interval(Duration::from_secs(10));
-			interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-			loop {
-				let now = Instant::now();
-				tokio::select! {
-					_ = stop_sync.changed() => {
-						return;
-					}
-					_ = interval.tick() => {
-						let confirmables = vec![
-							&*sync_cman as &(dyn Confirm + Sync + Send),
-							&*sync_cmon as &(dyn Confirm + Sync + Send),
-						];
-						match tx_sync.sync(confirmables).await {
-							Ok(()) => log_info!(
-								sync_logger,
-								"Background sync of Lightning wallet finished in {}ms.",
-								now.elapsed().as_millis()
-								),
-							Err(e) => {
-								log_error!(sync_logger, "Background sync of Lightning wallet failed: {}", e)
-							}
-						}
-					}
-				}
-			}
-		});
 
 		if let Some(listening_address) = &self.config.listening_address {
 			// Setup networking
@@ -959,6 +1013,18 @@ impl Node {
 				}
 			}
 		});
+
+		let event_handler = Arc::new(EventHandler::new(
+			Arc::clone(&self.wallet),
+			Arc::clone(&self.event_queue),
+			Arc::clone(&self.channel_manager),
+			Arc::clone(&self.network_graph),
+			Arc::clone(&self.keys_manager),
+			Arc::clone(&self.payment_store),
+			Arc::clone(&self.runtime),
+			Arc::clone(&self.logger),
+			Arc::clone(&self.config),
+		));
 
 		// Setup background processing
 		let background_persister = Arc::clone(&self.kv_store);
