@@ -270,6 +270,7 @@ where
 				// channel.
 				let confirmation_target = ConfirmationTarget::Normal;
 
+				// We set nLockTime to the current height to discourage fee sniping.
 				let cur_height = self.channel_manager.current_best_block().height();
 				let locktime = LockTime::from_height(cur_height).unwrap_or(LockTime::ZERO);
 
@@ -574,6 +575,7 @@ where
 					Some(locktime),
 					&Secp256k1::new(),
 				);
+
 				match res {
 					Ok(Some(spending_tx)) => self.wallet.broadcast_transactions(&[&spending_tx]),
 					Ok(None) => {
