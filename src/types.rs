@@ -8,7 +8,7 @@ use lightning::ln::msgs::RoutingMessageHandler;
 use lightning::ln::peer_handler::IgnoringMessageHandler;
 use lightning::routing::gossip;
 use lightning::routing::router::DefaultRouter;
-use lightning::routing::scoring::ProbabilisticScorer;
+use lightning::routing::scoring::{ProbabilisticScorer, ProbabilisticScoringFeeParameters};
 use lightning::sign::InMemorySigner;
 use lightning::util::ser::{Hostname, Readable, Writeable, Writer};
 use lightning_net_tokio::SocketDescriptor;
@@ -56,8 +56,13 @@ pub(crate) type ChannelManager<K> = lightning::ln::channelmanager::ChannelManage
 pub(crate) type KeysManager =
 	WalletKeysManager<bdk::database::SqliteDatabase, Arc<FilesystemLogger>>;
 
-pub(crate) type Router =
-	DefaultRouter<Arc<NetworkGraph>, Arc<FilesystemLogger>, Arc<Mutex<Scorer>>>;
+pub(crate) type Router = DefaultRouter<
+	Arc<NetworkGraph>,
+	Arc<FilesystemLogger>,
+	Arc<Mutex<Scorer>>,
+	ProbabilisticScoringFeeParameters,
+	Scorer,
+>;
 pub(crate) type Scorer = ProbabilisticScorer<Arc<NetworkGraph>, Arc<FilesystemLogger>>;
 
 pub(crate) type NetworkGraph = gossip::NetworkGraph<Arc<FilesystemLogger>>;

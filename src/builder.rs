@@ -23,7 +23,9 @@ use lightning::ln::channelmanager::{self, ChainParameters, ChannelManagerReadArg
 use lightning::ln::msgs::RoutingMessageHandler;
 use lightning::ln::peer_handler::{IgnoringMessageHandler, MessageHandler};
 use lightning::routing::router::DefaultRouter;
-use lightning::routing::scoring::{ProbabilisticScorer, ProbabilisticScoringParameters};
+use lightning::routing::scoring::{
+	ProbabilisticScorer, ProbabilisticScoringDecayParameters, ProbabilisticScoringFeeParameters,
+};
 use lightning::sign::EntropySource;
 
 use lightning::util::config::UserConfig;
@@ -505,7 +507,7 @@ fn build_with_store_internal<K: KVStore + Sync + Send + 'static>(
 		Ok(scorer) => Arc::new(Mutex::new(scorer)),
 		Err(e) => {
 			if e.kind() == std::io::ErrorKind::NotFound {
-				let params = ProbabilisticScoringParameters::default();
+				let params = ProbabilisticScoringDecayParameters::default();
 				Arc::new(Mutex::new(ProbabilisticScorer::new(
 					params,
 					Arc::clone(&network_graph),
@@ -517,11 +519,13 @@ fn build_with_store_internal<K: KVStore + Sync + Send + 'static>(
 		}
 	};
 
+	let scoring_fee_params = ProbabilisticScoringFeeParameters::default();
 	let router = Arc::new(DefaultRouter::new(
 		Arc::clone(&network_graph),
 		Arc::clone(&logger),
 		keys_manager.get_secure_random_bytes(),
 		Arc::clone(&scorer),
+		scoring_fee_params,
 	));
 
 	// Read ChannelMonitor state from store
