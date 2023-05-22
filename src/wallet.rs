@@ -249,7 +249,7 @@ where
 			psbt.extract_tx()
 		};
 
-		self.broadcast_transaction(&tx);
+		self.broadcast_transactions(&[&tx]);
 
 		let txid = tx.txid();
 
@@ -305,25 +305,36 @@ where
 	D: BatchDatabase,
 	L::Target: Logger,
 {
-	fn broadcast_transaction(&self, tx: &Transaction) {
+	fn broadcast_transactions(&self, txs: &[&Transaction]) {
 		let locked_runtime = self.runtime.read().unwrap();
 		if locked_runtime.as_ref().is_none() {
 			log_error!(self.logger, "Failed to broadcast transaction: No runtime.");
 			return;
 		}
 
-		let res = tokio::task::block_in_place(move || {
-			locked_runtime
-				.as_ref()
-				.unwrap()
-				.block_on(async move { self.blockchain.broadcast(tx).await })
+		let errors = tokio::task::block_in_place(move || {
+			locked_runtime.as_ref().unwrap().block_on(async move {
+				let mut handles = Vec::new();
+				let mut errors = Vec::new();
+
+				for tx in txs {
+					handles.push(self.blockchain.broadcast(tx));
+				}
+
+				for handle in handles {
+					match handle.await {
+						Ok(_) => {}
+						Err(e) => {
+							errors.push(e);
+						}
+					}
+				}
+				errors
+			})
 		});
 
-		match res {
-			Ok(_) => {}
-			Err(err) => {
-				log_error!(self.logger, "Failed to broadcast transaction: {}", err);
-			}
+		for e in errors {
+			log_error!(self.logger, "Failed to broadcast transaction: {}", e);
 		}
 	}
 }

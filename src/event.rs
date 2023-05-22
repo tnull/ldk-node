@@ -564,7 +564,7 @@ where
 					&Secp256k1::new(),
 				);
 				match res {
-					Ok(Some(spending_tx)) => self.wallet.broadcast_transaction(&spending_tx),
+					Ok(Some(spending_tx)) => self.wallet.broadcast_transactions(&[&spending_tx]),
 					Ok(None) => {
 						log_debug!(self.logger, "Omitted spending static outputs: {:?}", outputs);
 					}
