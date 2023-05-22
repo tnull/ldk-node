@@ -32,13 +32,13 @@ panic = 'abort'     # Abort on panic
 default = []
 
 [dependencies]
-lightning = { version = "0.0.115", features = ["max_level_trace", "std"] }
-lightning-invoice = { version = "0.23" }
-lightning-net-tokio = { version = "0.0.115" }
-lightning-persister = { version = "0.0.115" }
-lightning-background-processor = { version = "0.0.115", features = ["futures"] }
-lightning-rapid-gossip-sync = { version = "0.0.115" }
-lightning-transaction-sync = { version = "0.0.115", features = ["esplora-async-https"] }
+#lightning = { version = "0.0.116-alpha1", features = ["max_level_trace", "std"] }
+#lightning-invoice = { version = "0.24.0-alpha1" }
+#lightning-net-tokio = { version = "0.0.116-alpha1" }
+#lightning-persister = { version = "0.0.116-alpha1" }
+#lightning-background-processor = { version = "0.0.116-alpha1", features = ["futures"] }
+#lightning-rapid-gossip-sync = { version = "0.0.116-alpha1" }
+#lightning-transaction-sync = { version = "0.0.116-alpha1", features = ["esplora-async-https"] }
 
 #lightning = { git = "https://github.com/lightningdevkit/rust-lightning", branch="main", features = ["max_level_trace", "std"] }
 #lightning-invoice = { git = "https://github.com/lightningdevkit/rust-lightning", branch="main" }
@@ -47,6 +47,14 @@ lightning-transaction-sync = { version = "0.0.115", features = ["esplora-async-h
 #lightning-background-processor = { git = "https://github.com/lightningdevkit/rust-lightning", branch="main", features = ["futures"] }
 #lightning-rapid-gossip-sync = { git = "https://github.com/lightningdevkit/rust-lightning", branch="main" }
 #lightning-transaction-sync = { git = "https://github.com/lightningdevkit/rust-lightning", branch="main", features = ["esplora-async"] }
+
+lightning = { git = "https://github.com/wpaulino/rust-lightning", branch="bump-transaction-event-handler-fixups", features = ["max_level_trace", "std"] }
+lightning-invoice = { git = "https://github.com/wpaulino/rust-lightning", branch="bump-transaction-event-handler-fixups" }
+lightning-net-tokio = { git = "https://github.com/wpaulino/rust-lightning", branch="bump-transaction-event-handler-fixups" }
+lightning-persister = { git = "https://github.com/wpaulino/rust-lightning", branch="bump-transaction-event-handler-fixups" }
+lightning-background-processor = { git = "https://github.com/wpaulino/rust-lightning", branch="bump-transaction-event-handler-fixups", features = ["futures"] }
+lightning-rapid-gossip-sync = { git = "https://github.com/wpaulino/rust-lightning", branch="bump-transaction-event-handler-fixups" }
+lightning-transaction-sync = { git = "https://github.com/wpaulino/rust-lightning", branch="bump-transaction-event-handler-fixups", features = ["esplora-async"] }
 
 #lightning = { path = "../rust-lightning/lightning", features = ["max_level_trace", "std"] }
 #lightning-invoice = { path = "../rust-lightning/lightning-invoice" }
