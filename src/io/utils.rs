@@ -6,9 +6,9 @@ use crate::peer_store::PeerStore;
 use crate::{Error, EventQueue, PaymentDetails};
 
 use lightning::chain::channelmonitor::ChannelMonitor;
-use lightning::chain::keysinterface::{EntropySource, SignerProvider};
 use lightning::routing::gossip::NetworkGraph;
 use lightning::routing::scoring::{ProbabilisticScorer, ProbabilisticScoringParameters};
+use lightning::sign::{EntropySource, SignerProvider};
 use lightning::util::logger::Logger;
 use lightning::util::ser::{Readable, ReadableArgs, Writeable};
 

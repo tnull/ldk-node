@@ -18,13 +18,13 @@ use crate::{
 	WALLET_KEYS_SEED_LEN,
 };
 
-use lightning::chain::keysinterface::EntropySource;
 use lightning::chain::{chainmonitor, BestBlock, Watch};
 use lightning::ln::channelmanager::{self, ChainParameters, ChannelManagerReadArgs};
 use lightning::ln::msgs::RoutingMessageHandler;
 use lightning::ln::peer_handler::{IgnoringMessageHandler, MessageHandler};
 use lightning::routing::router::DefaultRouter;
 use lightning::routing::scoring::{ProbabilisticScorer, ProbabilisticScoringParameters};
+use lightning::sign::EntropySource;
 
 use lightning::util::config::UserConfig;
 use lightning::util::ser::ReadableArgs;

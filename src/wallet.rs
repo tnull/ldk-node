@@ -6,12 +6,12 @@ use lightning::chain::chaininterface::{
 	BroadcasterInterface, ConfirmationTarget, FeeEstimator, FEERATE_FLOOR_SATS_PER_KW,
 };
 
-use lightning::chain::keysinterface::{
+use lightning::ln::msgs::{DecodeError, UnsignedGossipMessage};
+use lightning::ln::script::ShutdownScript;
+use lightning::sign::{
 	EntropySource, InMemorySigner, KeyMaterial, KeysManager, NodeSigner, Recipient, SignerProvider,
 	SpendableOutputDescriptor,
 };
-use lightning::ln::msgs::{DecodeError, UnsignedGossipMessage};
-use lightning::ln::script::ShutdownScript;
 
 use lightning::util::message_signing;
 

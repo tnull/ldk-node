@@ -2,7 +2,6 @@ use crate::logger::FilesystemLogger;
 use crate::wallet::{Wallet, WalletKeysManager};
 
 use lightning::chain::chainmonitor;
-use lightning::chain::keysinterface::InMemorySigner;
 use lightning::ln::channelmanager::ChannelDetails as LdkChannelDetails;
 use lightning::ln::msgs::NetAddress as LdkNetAddress;
 use lightning::ln::msgs::RoutingMessageHandler;
@@ -10,6 +9,7 @@ use lightning::ln::peer_handler::IgnoringMessageHandler;
 use lightning::routing::gossip;
 use lightning::routing::router::DefaultRouter;
 use lightning::routing::scoring::ProbabilisticScorer;
+use lightning::sign::InMemorySigner;
 use lightning::util::ser::{Hostname, Readable, Writeable, Writer};
 use lightning_net_tokio::SocketDescriptor;
 use lightning_transaction_sync::EsploraSyncClient;

@@ -124,10 +124,10 @@ use wallet::Wallet;
 
 use logger::{log_error, log_info, log_trace, FilesystemLogger, Logger};
 
-use lightning::chain::keysinterface::EntropySource;
 use lightning::chain::Confirm;
 use lightning::ln::channelmanager::{self, PaymentId, RecipientOnionFields, Retry};
 use lightning::ln::{PaymentHash, PaymentPreimage};
+use lightning::sign::EntropySource;
 
 use lightning::util::config::{ChannelConfig, ChannelHandshakeConfig, UserConfig};
 pub use lightning::util::logger::Level as LogLevel;
