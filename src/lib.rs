@@ -1146,9 +1146,12 @@ impl<K: KVStore + Sync + Send + 'static> Node<K> {
 			invoice.min_final_cltv_expiry_delta() as u32,
 		)
 		.with_expiry_time(expiry_time.as_secs())
-		.with_route_hints(invoice.route_hints());
+		.with_route_hints(invoice.route_hints())
+		.map_err(|_| Error::InvalidInvoice)?;
 		if let Some(features) = invoice.features() {
-			payment_params = payment_params.with_features(features.clone());
+			payment_params = payment_params
+				.with_bolt11_features(features.clone())
+				.map_err(|_| Error::InvalidInvoice)?;
 		}
 		let route_params = RouteParameters { payment_params, final_value_msat: amount_msat };
 

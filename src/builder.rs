@@ -658,12 +658,14 @@ fn build_with_store_internal<K: KVStore + Sync + Send + 'static>(
 			route_handler: Arc::clone(&p2p_gossip_sync)
 				as Arc<dyn RoutingMessageHandler + Sync + Send>,
 			onion_message_handler: onion_messenger,
+			custom_message_handler: IgnoringMessageHandler {},
 		},
 		GossipSync::Rapid(_) => MessageHandler {
 			chan_handler: Arc::clone(&channel_manager),
 			route_handler: Arc::new(IgnoringMessageHandler {})
 				as Arc<dyn RoutingMessageHandler + Sync + Send>,
 			onion_message_handler: onion_messenger,
+			custom_message_handler: IgnoringMessageHandler {},
 		},
 		GossipSync::None => {
 			unreachable!("We must always have a gossip sync!");
@@ -675,7 +677,6 @@ fn build_with_store_internal<K: KVStore + Sync + Send + 'static>(
 		cur_time.as_secs().try_into().map_err(|_| BuildError::InvalidSystemTime)?,
 		&ephemeral_bytes,
 		Arc::clone(&logger),
-		IgnoringMessageHandler {},
 		Arc::clone(&keys_manager),
 	));
 
