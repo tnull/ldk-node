@@ -24,7 +24,7 @@ use bitcoin::bech32::u5;
 use bitcoin::secp256k1::ecdh::SharedSecret;
 use bitcoin::secp256k1::ecdsa::{RecoverableSignature, Signature};
 use bitcoin::secp256k1::{PublicKey, Scalar, Secp256k1, Signing};
-use bitcoin::{Script, Transaction, TxOut, Txid};
+use bitcoin::{LockTime, PackedLockTime, Script, Transaction, TxOut, Txid};
 
 use std::collections::HashMap;
 use std::ops::Deref;
@@ -154,13 +154,18 @@ where
 
 	pub(crate) fn create_funding_transaction(
 		&self, output_script: Script, value_sats: u64, confirmation_target: ConfirmationTarget,
+		locktime: LockTime,
 	) -> Result<Transaction, Error> {
 		let fee_rate = self.estimate_fee_rate(confirmation_target);
 
 		let locked_wallet = self.inner.lock().unwrap();
 		let mut tx_builder = locked_wallet.build_tx();
 
-		tx_builder.add_recipient(output_script, value_sats).fee_rate(fee_rate).enable_rbf();
+		tx_builder
+			.add_recipient(output_script, value_sats)
+			.fee_rate(fee_rate)
+			.nlocktime(locktime)
+			.enable_rbf();
 
 		let mut psbt = match tx_builder.finish() {
 			Ok((psbt, _)) => {
@@ -372,7 +377,7 @@ where
 	pub fn spend_spendable_outputs<C: Signing>(
 		&self, descriptors: &[&SpendableOutputDescriptor], outputs: Vec<TxOut>,
 		change_destination_script: Script, feerate_sat_per_1000_weight: u32,
-		secp_ctx: &Secp256k1<C>,
+		locktime: Option<PackedLockTime>, secp_ctx: &Secp256k1<C>,
 	) -> Result<Option<Transaction>, ()> {
 		let only_non_static = &descriptors
 			.iter()
@@ -388,6 +393,7 @@ where
 				outputs,
 				change_destination_script,
 				feerate_sat_per_1000_weight,
+				locktime,
 				secp_ctx,
 			)
 			.map(Some)

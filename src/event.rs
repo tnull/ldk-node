@@ -20,7 +20,7 @@ use lightning::util::errors::APIError;
 use lightning::util::ser::{Readable, ReadableArgs, Writeable, Writer};
 
 use bitcoin::secp256k1::{PublicKey, Secp256k1};
-use bitcoin::OutPoint;
+use bitcoin::{LockTime, OutPoint, PackedLockTime};
 use rand::{thread_rng, Rng};
 use std::collections::VecDeque;
 use std::ops::Deref;
@@ -270,11 +270,15 @@ where
 				// channel.
 				let confirmation_target = ConfirmationTarget::Normal;
 
+				let cur_height = self.channel_manager.current_best_block().height();
+				let locktime = LockTime::from_height(cur_height).unwrap_or(LockTime::ZERO);
+
 				// Sign the final funding transaction and broadcast it.
 				match self.wallet.create_funding_transaction(
 					output_script,
 					channel_value_satoshis,
 					confirmation_target,
+					locktime,
 				) {
 					Ok(final_tx) => {
 						// Give the funding transaction back to LDK for opening the channel.
@@ -556,11 +560,17 @@ where
 				let output_descriptors = &outputs.iter().collect::<Vec<_>>();
 				let tx_feerate =
 					self.wallet.get_est_sat_per_1000_weight(ConfirmationTarget::Normal);
+
+				// We set nLockTime to the current height to discourage fee sniping.
+				let cur_height = self.channel_manager.current_best_block().height();
+				let locktime: PackedLockTime =
+					LockTime::from_height(cur_height).map_or(PackedLockTime::ZERO, |l| l.into());
 				let res = self.keys_manager.spend_spendable_outputs(
 					output_descriptors,
 					Vec::new(),
 					destination_address.script_pubkey(),
 					tx_feerate,
+					Some(locktime),
 					&Secp256k1::new(),
 				);
 				match res {
