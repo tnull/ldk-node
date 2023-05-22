@@ -455,28 +455,23 @@ where
 		self.inner.read_chan_signer(reader)
 	}
 
-	fn get_destination_script(&self) -> Script {
-		let address = self.wallet.get_new_address().unwrap_or_else(|e| {
+	fn get_destination_script(&self) -> Result<Script, ()> {
+		let address = self.wallet.get_new_address().map_err(|e| {
 			log_error!(self.logger, "Failed to retrieve new address from wallet: {}", e);
-			panic!("Failed to retrieve new address from wallet");
-		});
-		address.script_pubkey()
+		})?;
+		Ok(address.script_pubkey())
 	}
 
-	fn get_shutdown_scriptpubkey(&self) -> ShutdownScript {
-		let address = self.wallet.get_new_address().unwrap_or_else(|e| {
+	fn get_shutdown_scriptpubkey(&self) -> Result<ShutdownScript, ()> {
+		let address = self.wallet.get_new_address().map_err(|e| {
 			log_error!(self.logger, "Failed to retrieve new address from wallet: {}", e);
-			panic!("Failed to retrieve new address from wallet");
-		});
+		})?;
 
 		match address.payload {
 			bitcoin::util::address::Payload::WitnessProgram { version, program } => {
-				return ShutdownScript::new_witness_program(version, &program).unwrap_or_else(
-					|e| {
-						log_error!(self.logger, "Invalid shutdown script: {:?}", e);
-						panic!("Invalid shutdown script.");
-					},
-				);
+				ShutdownScript::new_witness_program(version, &program).map_err(|e| {
+					log_error!(self.logger, "Invalid shutdown script: {:?}", e);
+				})
 			}
 			_ => {
 				log_error!(
