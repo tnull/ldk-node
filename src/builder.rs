@@ -104,65 +104,77 @@ impl NodeBuilder {
 	///
 	/// If the given file does not exist a new random seed file will be generated and
 	/// stored at the given location.
-	pub fn set_entropy_seed_path(&mut self, seed_path: String) {
+	pub fn set_entropy_seed_path(&mut self, seed_path: String) -> &mut Self {
 		self.entropy_source_config = Some(EntropySourceConfig::SeedFile(seed_path));
+		self
 	}
 
 	/// Configures the [`Node`] instance to source its wallet entropy from the given 64 seed bytes.
 	///
 	/// **Note:** Panics if the length of the given `seed_bytes` differs from 64.
-	pub fn set_entropy_seed_bytes(&mut self, seed_bytes: Vec<u8>) {
+	pub fn set_entropy_seed_bytes(&mut self, seed_bytes: Vec<u8>) -> &mut Self {
 		if seed_bytes.len() != WALLET_KEYS_SEED_LEN {
 			panic!("Failed to set seed due to invalid length.");
 		}
 		let mut bytes = [0u8; WALLET_KEYS_SEED_LEN];
 		bytes.copy_from_slice(&seed_bytes);
 		self.entropy_source_config = Some(EntropySourceConfig::SeedBytes(bytes));
+		self
 	}
 
 	/// Configures the [`Node`] instance to source its wallet entropy from a [BIP 39] mnemonic.
 	///
 	/// [BIP 39]: https://github.com/bitcoin/bips/blob/master/bip-0039.mediawiki
-	pub fn set_entropy_bip39_mnemonic(&mut self, mnemonic: Mnemonic, passphrase: Option<String>) {
+	pub fn set_entropy_bip39_mnemonic(
+		&mut self, mnemonic: Mnemonic, passphrase: Option<String>,
+	) -> &mut Self {
 		self.entropy_source_config =
 			Some(EntropySourceConfig::Bip39Mnemonic { mnemonic, passphrase });
+		self
 	}
 
 	/// Configures the [`Node`] instance to source its chain data from the given Esplora server.
-	pub fn set_esplora_server(&mut self, esplora_server_url: String) {
+	pub fn set_esplora_server(&mut self, esplora_server_url: String) -> &mut Self {
 		self.chain_data_source_config = Some(ChainDataSourceConfig::Esplora(esplora_server_url));
+		self
 	}
 
 	/// Configures the [`Node`] instance to source its gossip data from the Lightning peer-to-peer
 	/// network.
-	pub fn set_gossip_source_p2p(&mut self) {
+	pub fn set_gossip_source_p2p(&mut self) -> &mut Self {
 		self.gossip_source_config = Some(GossipSourceConfig::P2PNetwork);
+		self
 	}
 
 	/// Configures the [`Node`] instance to source its gossip data from the given RapidGossipSync
 	/// server.
-	pub fn set_gossip_source_rgs(&mut self, rgs_server_url: String) {
+	pub fn set_gossip_source_rgs(&mut self, rgs_server_url: String) -> &mut Self {
 		self.gossip_source_config = Some(GossipSourceConfig::RapidGossipSync(rgs_server_url));
+		self
 	}
 
 	/// Sets the used storage directory path.
-	pub fn set_storage_dir_path(&mut self, storage_dir_path: String) {
+	pub fn set_storage_dir_path(&mut self, storage_dir_path: String) -> &mut Self {
 		self.config.storage_dir_path = storage_dir_path;
+		self
 	}
 
 	/// Sets the Bitcoin network used.
-	pub fn set_network(&mut self, network: Network) {
+	pub fn set_network(&mut self, network: Network) -> &mut Self {
 		self.config.network = network;
+		self
 	}
 
 	/// Sets the IP address and TCP port on which [`Node`] will listen for incoming network connections.
-	pub fn set_listening_address(&mut self, listening_address: NetAddress) {
+	pub fn set_listening_address(&mut self, listening_address: NetAddress) -> &mut Self {
 		self.config.listening_address = Some(listening_address);
+		self
 	}
 
 	/// Sets the level at which [`Node`] will log messages.
-	pub fn set_log_level(&mut self, level: LogLevel) {
+	pub fn set_log_level(&mut self, level: LogLevel) -> &mut Self {
 		self.config.log_level = level;
+		self
 	}
 
 	/// Builds a [`Node`] instance with a [`SqliteStore`] backend and according to the options
@@ -233,58 +245,58 @@ impl ArcedNodeBuilder {
 	/// If the given file does not exist a new random seed file will be generated and
 	/// stored at the given location.
 	pub fn set_entropy_seed_path(&self, seed_path: String) {
-		self.inner.write().unwrap().set_entropy_seed_path(seed_path)
+		self.inner.write().unwrap().set_entropy_seed_path(seed_path);
 	}
 
 	/// Configures the [`Node`] instance to source its wallet entropy from the given 64 seed bytes.
 	///
 	/// **Note:** Panics if the length of the given `seed_bytes` differs from 64.
 	pub fn set_entropy_seed_bytes(&self, seed_bytes: Vec<u8>) {
-		self.inner.write().unwrap().set_entropy_seed_bytes(seed_bytes)
+		self.inner.write().unwrap().set_entropy_seed_bytes(seed_bytes);
 	}
 
 	/// Configures the [`Node`] instance to source its wallet entropy from a [BIP 39] mnemonic.
 	///
 	/// [BIP 39]: https://github.com/bitcoin/bips/blob/master/bip-0039.mediawiki
 	pub fn set_entropy_bip39_mnemonic(&self, mnemonic: Mnemonic, passphrase: Option<String>) {
-		self.inner.write().unwrap().set_entropy_bip39_mnemonic(mnemonic, passphrase)
+		self.inner.write().unwrap().set_entropy_bip39_mnemonic(mnemonic, passphrase);
 	}
 
 	/// Configures the [`Node`] instance to source its chain data from the given Esplora server.
 	pub fn set_esplora_server(&self, esplora_server_url: String) {
-		self.inner.write().unwrap().set_esplora_server(esplora_server_url)
+		self.inner.write().unwrap().set_esplora_server(esplora_server_url);
 	}
 
 	/// Configures the [`Node`] instance to source its gossip data from the Lightning peer-to-peer
 	/// network.
 	pub fn set_gossip_source_p2p(&self) {
-		self.inner.write().unwrap().set_gossip_source_p2p()
+		self.inner.write().unwrap().set_gossip_source_p2p();
 	}
 
 	/// Configures the [`Node`] instance to source its gossip data from the given RapidGossipSync
 	/// server.
 	pub fn set_gossip_source_rgs(&self, rgs_server_url: String) {
-		self.inner.write().unwrap().set_gossip_source_rgs(rgs_server_url)
+		self.inner.write().unwrap().set_gossip_source_rgs(rgs_server_url);
 	}
 
 	/// Sets the used storage directory path.
 	pub fn set_storage_dir_path(&self, storage_dir_path: String) {
-		self.inner.write().unwrap().set_storage_dir_path(storage_dir_path)
+		self.inner.write().unwrap().set_storage_dir_path(storage_dir_path);
 	}
 
 	/// Sets the Bitcoin network used.
 	pub fn set_network(&self, network: Network) {
-		self.inner.write().unwrap().set_network(network)
+		self.inner.write().unwrap().set_network(network);
 	}
 
 	/// Sets the IP address and TCP port on which [`Node`] will listen for incoming network connections.
 	pub fn set_listening_address(&self, listening_address: NetAddress) {
-		self.inner.write().unwrap().set_listening_address(listening_address)
+		self.inner.write().unwrap().set_listening_address(listening_address);
 	}
 
 	/// Sets the level at which [`Node`] will log messages.
 	pub fn set_log_level(&self, level: LogLevel) {
-		self.inner.write().unwrap().set_log_level(level)
+		self.inner.write().unwrap().set_log_level(level);
 	}
 
 	/// Builds a [`Node`] instance with a [`SqliteStore`] backend and according to the options
