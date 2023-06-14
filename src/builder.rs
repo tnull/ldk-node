@@ -308,10 +308,10 @@ impl ArcedNodeBuilder {
 }
 
 /// Builds a [`Node`] instance according to the options previously configured.
-fn build_with_store_internal<'a, K: KVStore + Sync + Send + 'static>(
-	config: Arc<Config>, entropy_source_config: Option<&'a EntropySourceConfig>,
-	chain_data_source_config: Option<&'a ChainDataSourceConfig>,
-	gossip_source_config: Option<&'a GossipSourceConfig>, kv_store: Arc<K>,
+fn build_with_store_internal<K: KVStore + Sync + Send + 'static>(
+	config: Arc<Config>, entropy_source_config: Option<&EntropySourceConfig>,
+	chain_data_source_config: Option<&ChainDataSourceConfig>,
+	gossip_source_config: Option<&GossipSourceConfig>, kv_store: Arc<K>,
 	runtime: Arc<RwLock<Option<tokio::runtime::Runtime>>>,
 ) -> Node<K> {
 	let ldk_data_dir = format!("{}/ldk", config.storage_dir_path);
