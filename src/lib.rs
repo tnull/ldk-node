@@ -33,12 +33,11 @@
 //! use std::str::FromStr;
 //!
 //! fn main() {
-//! 	let mut builder = Builder::new();
-//! 	builder.set_network(Network::Testnet);
-//! 	builder.set_esplora_server("https://blockstream.info/testnet/api".to_string());
-//! 	builder.set_gossip_source_rgs("https://rapidsync.lightningdevkit.org/testnet/snapshot".to_string());
-//!
-//! 	let node = builder.build();
+//! 	let node = Builder::new()
+//! 		.set_network(Network::Testnet)
+//! 		.set_esplora_server("https://blockstream.info/testnet/api".to_string())
+//! 		.set_gossip_source_rgs("https://rapidsync.lightningdevkit.org/testnet/snapshot".to_string())
+//! 		.build();
 //!
 //! 	node.start().unwrap();
 //!
@@ -1316,8 +1315,7 @@ impl<K: KVStore + Sync + Send + 'static> Node<K> {
 	/// # let mut config = Config::default();
 	/// # config.network = Network::Regtest;
 	/// # config.storage_dir_path = "/tmp/ldk_node_test/".to_string();
-	/// # let builder = Builder::from_config(config);
-	/// # let node = builder.build();
+	/// # let node = Builder::from_config(config).build();
 	/// node.list_payments_with_filter(|p| p.direction == PaymentDirection::Outbound);
 	/// ```
 	pub fn list_payments_with_filter<F: FnMut(&&PaymentDetails) -> bool>(

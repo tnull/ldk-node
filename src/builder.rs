@@ -104,7 +104,7 @@ impl NodeBuilder {
 	///
 	/// If the given file does not exist a new random seed file will be generated and
 	/// stored at the given location.
-	pub fn set_entropy_seed_path(&mut self, seed_path: String) -> &mut Self {
+	pub fn set_entropy_seed_path(mut self, seed_path: String) -> Self {
 		self.entropy_source_config = Some(EntropySourceConfig::SeedFile(seed_path));
 		self
 	}
@@ -112,7 +112,7 @@ impl NodeBuilder {
 	/// Configures the [`Node`] instance to source its wallet entropy from the given 64 seed bytes.
 	///
 	/// **Note:** Panics if the length of the given `seed_bytes` differs from 64.
-	pub fn set_entropy_seed_bytes(&mut self, seed_bytes: Vec<u8>) -> &mut Self {
+	pub fn set_entropy_seed_bytes(mut self, seed_bytes: Vec<u8>) -> Self {
 		if seed_bytes.len() != WALLET_KEYS_SEED_LEN {
 			panic!("Failed to set seed due to invalid length.");
 		}
@@ -126,60 +126,60 @@ impl NodeBuilder {
 	///
 	/// [BIP 39]: https://github.com/bitcoin/bips/blob/master/bip-0039.mediawiki
 	pub fn set_entropy_bip39_mnemonic(
-		&mut self, mnemonic: Mnemonic, passphrase: Option<String>,
-	) -> &mut Self {
+		mut self, mnemonic: Mnemonic, passphrase: Option<String>,
+	) -> Self {
 		self.entropy_source_config =
 			Some(EntropySourceConfig::Bip39Mnemonic { mnemonic, passphrase });
 		self
 	}
 
 	/// Configures the [`Node`] instance to source its chain data from the given Esplora server.
-	pub fn set_esplora_server(&mut self, esplora_server_url: String) -> &mut Self {
+	pub fn set_esplora_server(mut self, esplora_server_url: String) -> Self {
 		self.chain_data_source_config = Some(ChainDataSourceConfig::Esplora(esplora_server_url));
 		self
 	}
 
 	/// Configures the [`Node`] instance to source its gossip data from the Lightning peer-to-peer
 	/// network.
-	pub fn set_gossip_source_p2p(&mut self) -> &mut Self {
+	pub fn set_gossip_source_p2p(mut self) -> Self {
 		self.gossip_source_config = Some(GossipSourceConfig::P2PNetwork);
 		self
 	}
 
 	/// Configures the [`Node`] instance to source its gossip data from the given RapidGossipSync
 	/// server.
-	pub fn set_gossip_source_rgs(&mut self, rgs_server_url: String) -> &mut Self {
+	pub fn set_gossip_source_rgs(mut self, rgs_server_url: String) -> Self {
 		self.gossip_source_config = Some(GossipSourceConfig::RapidGossipSync(rgs_server_url));
 		self
 	}
 
 	/// Sets the used storage directory path.
-	pub fn set_storage_dir_path(&mut self, storage_dir_path: String) -> &mut Self {
+	pub fn set_storage_dir_path(mut self, storage_dir_path: String) -> Self {
 		self.config.storage_dir_path = storage_dir_path;
 		self
 	}
 
 	/// Sets the Bitcoin network used.
-	pub fn set_network(&mut self, network: Network) -> &mut Self {
+	pub fn set_network(mut self, network: Network) -> Self {
 		self.config.network = network;
 		self
 	}
 
 	/// Sets the IP address and TCP port on which [`Node`] will listen for incoming network connections.
-	pub fn set_listening_address(&mut self, listening_address: NetAddress) -> &mut Self {
+	pub fn set_listening_address(mut self, listening_address: NetAddress) -> Self {
 		self.config.listening_address = Some(listening_address);
 		self
 	}
 
 	/// Sets the level at which [`Node`] will log messages.
-	pub fn set_log_level(&mut self, level: LogLevel) -> &mut Self {
+	pub fn set_log_level(mut self, level: LogLevel) -> Self {
 		self.config.log_level = level;
 		self
 	}
 
 	/// Builds a [`Node`] instance with a [`SqliteStore`] backend and according to the options
 	/// previously configured.
-	pub fn build(&self) -> Node<SqliteStore> {
+	pub fn build(self) -> Node<SqliteStore> {
 		let storage_dir_path = self.config.storage_dir_path.clone();
 		fs::create_dir_all(storage_dir_path.clone()).expect("Failed to create LDK data directory");
 		let kv_store = Arc::new(SqliteStore::new(storage_dir_path.into()));
@@ -188,7 +188,7 @@ impl NodeBuilder {
 
 	/// Builds a [`Node`] instance with a [`FilesystemStore`] backend and according to the options
 	/// previously configured.
-	pub fn build_with_fs_store(&self) -> Node<FilesystemStore> {
+	pub fn build_with_fs_store(self) -> Node<FilesystemStore> {
 		let storage_dir_path = self.config.storage_dir_path.clone();
 		fs::create_dir_all(storage_dir_path.clone()).expect("Failed to create LDK data directory");
 		let kv_store = Arc::new(FilesystemStore::new(storage_dir_path.into()));
@@ -196,9 +196,7 @@ impl NodeBuilder {
 	}
 
 	/// Builds a [`Node`] instance according to the options previously configured.
-	pub fn build_with_store<K: KVStore + Sync + Send + 'static>(
-		&self, kv_store: Arc<K>,
-	) -> Node<K> {
+	pub fn build_with_store<K: KVStore + Sync + Send + 'static>(self, kv_store: Arc<K>) -> Node<K> {
 		let config = Arc::new(self.config.clone());
 
 		let runtime = Arc::new(RwLock::new(None));
@@ -223,20 +221,20 @@ impl NodeBuilder {
 #[derive(Debug)]
 #[cfg(feature = "uniffi")]
 pub struct ArcedNodeBuilder {
-	inner: RwLock<NodeBuilder>,
+	inner: Mutex<Option<NodeBuilder>>,
 }
 
 #[cfg(feature = "uniffi")]
 impl ArcedNodeBuilder {
 	/// Creates a new builder instance with the default configuration.
 	pub fn new() -> Self {
-		let inner = RwLock::new(NodeBuilder::new());
+		let inner = Mutex::new(Some(NodeBuilder::new()));
 		Self { inner }
 	}
 
 	/// Creates a new builder instance from an [`Config`].
 	pub fn from_config(config: Config) -> Self {
-		let inner = RwLock::new(NodeBuilder::from_config(config));
+		let inner = Mutex::new(Some(NodeBuilder::from_config(config)));
 		Self { inner }
 	}
 
@@ -245,77 +243,88 @@ impl ArcedNodeBuilder {
 	/// If the given file does not exist a new random seed file will be generated and
 	/// stored at the given location.
 	pub fn set_entropy_seed_path(&self, seed_path: String) {
-		self.inner.write().unwrap().set_entropy_seed_path(seed_path);
+		let mut locked_inner = self.inner.lock().unwrap();
+		*locked_inner = locked_inner.take().map(|b| b.set_entropy_seed_path(seed_path));
 	}
 
 	/// Configures the [`Node`] instance to source its wallet entropy from the given 64 seed bytes.
 	///
 	/// **Note:** Panics if the length of the given `seed_bytes` differs from 64.
 	pub fn set_entropy_seed_bytes(&self, seed_bytes: Vec<u8>) {
-		self.inner.write().unwrap().set_entropy_seed_bytes(seed_bytes);
+		let mut locked_inner = self.inner.lock().unwrap();
+		*locked_inner = locked_inner.take().map(|b| b.set_entropy_seed_bytes(seed_bytes));
 	}
 
 	/// Configures the [`Node`] instance to source its wallet entropy from a [BIP 39] mnemonic.
 	///
 	/// [BIP 39]: https://github.com/bitcoin/bips/blob/master/bip-0039.mediawiki
 	pub fn set_entropy_bip39_mnemonic(&self, mnemonic: Mnemonic, passphrase: Option<String>) {
-		self.inner.write().unwrap().set_entropy_bip39_mnemonic(mnemonic, passphrase);
+		let mut locked_inner = self.inner.lock().unwrap();
+		*locked_inner =
+			locked_inner.take().map(|b| b.set_entropy_bip39_mnemonic(mnemonic, passphrase));
 	}
 
 	/// Configures the [`Node`] instance to source its chain data from the given Esplora server.
 	pub fn set_esplora_server(&self, esplora_server_url: String) {
-		self.inner.write().unwrap().set_esplora_server(esplora_server_url);
+		let mut locked_inner = self.inner.lock().unwrap();
+		*locked_inner = locked_inner.take().map(|b| b.set_esplora_server(esplora_server_url));
 	}
 
 	/// Configures the [`Node`] instance to source its gossip data from the Lightning peer-to-peer
 	/// network.
 	pub fn set_gossip_source_p2p(&self) {
-		self.inner.write().unwrap().set_gossip_source_p2p();
+		let mut locked_inner = self.inner.lock().unwrap();
+		*locked_inner = locked_inner.take().map(|b| b.set_gossip_source_p2p());
 	}
 
 	/// Configures the [`Node`] instance to source its gossip data from the given RapidGossipSync
 	/// server.
 	pub fn set_gossip_source_rgs(&self, rgs_server_url: String) {
-		self.inner.write().unwrap().set_gossip_source_rgs(rgs_server_url);
+		let mut locked_inner = self.inner.lock().unwrap();
+		*locked_inner = locked_inner.take().map(|b| b.set_gossip_source_rgs(rgs_server_url));
 	}
 
 	/// Sets the used storage directory path.
 	pub fn set_storage_dir_path(&self, storage_dir_path: String) {
-		self.inner.write().unwrap().set_storage_dir_path(storage_dir_path);
+		let mut locked_inner = self.inner.lock().unwrap();
+		*locked_inner = locked_inner.take().map(|b| b.set_storage_dir_path(storage_dir_path));
 	}
 
 	/// Sets the Bitcoin network used.
 	pub fn set_network(&self, network: Network) {
-		self.inner.write().unwrap().set_network(network);
+		let mut locked_inner = self.inner.lock().unwrap();
+		*locked_inner = locked_inner.take().map(|b| b.set_network(network));
 	}
 
 	/// Sets the IP address and TCP port on which [`Node`] will listen for incoming network connections.
 	pub fn set_listening_address(&self, listening_address: NetAddress) {
-		self.inner.write().unwrap().set_listening_address(listening_address);
+		let mut locked_inner = self.inner.lock().unwrap();
+		*locked_inner = locked_inner.take().map(|b| b.set_listening_address(listening_address));
 	}
 
 	/// Sets the level at which [`Node`] will log messages.
 	pub fn set_log_level(&self, level: LogLevel) {
-		self.inner.write().unwrap().set_log_level(level);
+		let mut locked_inner = self.inner.lock().unwrap();
+		*locked_inner = locked_inner.take().map(|b| b.set_log_level(level));
 	}
 
 	/// Builds a [`Node`] instance with a [`SqliteStore`] backend and according to the options
 	/// previously configured.
 	pub fn build(&self) -> Arc<Node<SqliteStore>> {
-		Arc::new(self.inner.read().unwrap().build())
+		Arc::new(self.inner.lock().unwrap().take().unwrap().build())
 	}
 
 	/// Builds a [`Node`] instance with a [`FilesystemStore`] backend and according to the options
 	/// previously configured.
 	pub fn build_with_fs_store(&self) -> Arc<Node<FilesystemStore>> {
-		Arc::new(self.inner.read().unwrap().build_with_fs_store())
+		Arc::new(self.inner.lock().unwrap().take().unwrap().build_with_fs_store())
 	}
 
 	/// Builds a [`Node`] instance according to the options previously configured.
 	pub fn build_with_store<K: KVStore + Sync + Send + 'static>(
 		&self, kv_store: Arc<K>,
 	) -> Arc<Node<K>> {
-		Arc::new(self.inner.read().unwrap().build_with_store(kv_store))
+		Arc::new(self.inner.lock().unwrap().take().unwrap().build_with_store(kv_store))
 	}
 }
 
