@@ -33,11 +33,20 @@
 //! use std::str::FromStr;
 //!
 //! fn main() {
+//! # #[cfg(not(feature = "uniffi"))]
 //! 	let node = Builder::new()
 //! 		.set_network(Network::Testnet)
 //! 		.set_esplora_server("https://blockstream.info/testnet/api".to_string())
 //! 		.set_gossip_source_rgs("https://rapidsync.lightningdevkit.org/testnet/snapshot".to_string())
 //! 		.build();
+//! # #[cfg(feature = "uniffi")]
+//! 	let node = {
+//! 		let builder = Builder::new();
+//! 		builder.set_network(Network::Testnet);
+//! 		builder.set_esplora_server("https://blockstream.info/testnet/api".to_string());
+//! 		builder.set_gossip_source_rgs("https://rapidsync.lightningdevkit.org/testnet/snapshot".to_string());
+//! 		builder.build()
+//! 	};
 //!
 //! 	node.start().unwrap();
 //!
