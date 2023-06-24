@@ -89,8 +89,21 @@ pub(crate) type OnionMessenger = lightning::onion_message::OnionMessenger<
 	Arc<WalletKeysManager<bdk::database::SqliteDatabase, Arc<FilesystemLogger>>>,
 	Arc<WalletKeysManager<bdk::database::SqliteDatabase, Arc<FilesystemLogger>>>,
 	Arc<FilesystemLogger>,
+	Arc<FakeMessageRouter>,
+	IgnoringMessageHandler,
 	IgnoringMessageHandler,
 >;
+
+pub(crate) struct FakeMessageRouter {}
+
+impl lightning::onion_message::MessageRouter for FakeMessageRouter {
+	fn find_path(
+		&self, _sender: PublicKey, _peers: Vec<PublicKey>,
+		_destination: lightning::onion_message::Destination,
+	) -> Result<lightning::onion_message::OnionMessagePath, ()> {
+		unimplemented!()
+	}
+}
 
 /// The global identifier of a channel.
 ///

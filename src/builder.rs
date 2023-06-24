@@ -8,8 +8,8 @@ use crate::logger::{log_error, FilesystemLogger, Logger};
 use crate::payment_store::PaymentStore;
 use crate::peer_store::PeerStore;
 use crate::types::{
-	ChainMonitor, ChannelManager, GossipSync, KeysManager, NetAddress, NetworkGraph,
-	OnionMessenger, PeerManager,
+	ChainMonitor, ChannelManager, FakeMessageRouter, GossipSync, KeysManager, NetAddress,
+	NetworkGraph, OnionMessenger, PeerManager,
 };
 use crate::wallet::Wallet;
 use crate::LogLevel;
@@ -615,6 +615,8 @@ fn build_with_store_internal<K: KVStore + Sync + Send + 'static>(
 		Arc::clone(&keys_manager),
 		Arc::clone(&keys_manager),
 		Arc::clone(&logger),
+		Arc::new(FakeMessageRouter {}),
+		IgnoringMessageHandler {},
 		IgnoringMessageHandler {},
 	));
 	let ephemeral_bytes: [u8; 32] = keys_manager.get_secure_random_bytes();
