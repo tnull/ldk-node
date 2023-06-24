@@ -333,6 +333,7 @@ where
 				via_user_channel_id: _,
 				claim_deadline: _,
 				onion_fields: _,
+				counterparty_skimmed_fee_msat: _,
 			} => {
 				if let Some(info) = self.payment_store.get(&payment_hash) {
 					if info.status == PaymentStatus::Succeeded {
@@ -757,6 +758,7 @@ where
 			}
 			LdkEvent::DiscardFunding { .. } => {}
 			LdkEvent::HTLCIntercepted { .. } => {}
+			LdkEvent::BumpTransaction(_) => {}
 		}
 	}
 }
