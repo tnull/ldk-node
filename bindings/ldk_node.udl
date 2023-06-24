@@ -205,6 +205,7 @@ dictionary ChannelConfig {
 	u16 cltv_expiry_delta;
 	u64 max_dust_htlc_exposure_msat;
 	u64 force_close_avoidance_max_fee_satoshis;
+	boolean accept_underpaying_htlcs;
 };
 
 enum LogLevel {
