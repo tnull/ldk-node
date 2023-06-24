@@ -200,12 +200,12 @@ dictionary PeerDetails {
 };
 
 dictionary ChannelConfig {
-	u32 forwarding_fee_proportional_millionths;
-	u32 forwarding_fee_base_msat;
-	u16 cltv_expiry_delta;
-	u64 max_dust_htlc_exposure_msat;
-	u64 force_close_avoidance_max_fee_satoshis;
-	boolean accept_underpaying_htlcs;
+	u32 forwarding_fee_proportional_millionths = 0;
+	u32 forwarding_fee_base_msat = 1000;
+	u16 cltv_expiry_delta = 72;
+	u64 max_dust_htlc_exposure_msat = 5000000;
+	u64 force_close_avoidance_max_fee_satoshis = 1000;
+	boolean accept_underpaying_htlcs = false;
 };
 
 enum LogLevel {
