@@ -548,12 +548,9 @@ fn build_with_store_internal<K: KVStore + Sync + Send + 'static>(
 	// Initialize the ChannelManager
 	let mut user_config = UserConfig::default();
 	user_config.channel_handshake_limits.force_announced_channel_preference = false;
+	user_config.manually_accept_inbound_channels = true;
+	user_config.channel_handshake_config.negotiate_anchors_zero_fee_htlc_tx = true;
 
-	if !config.trusted_peers_0conf.is_empty() {
-		// Manually accept inbound channels if we expect 0conf channel requests, avoid
-		// generating the events otherwise.
-		user_config.manually_accept_inbound_channels = true;
-	}
 	let channel_manager = {
 		if let Ok(mut reader) =
 			kv_store.read(CHANNEL_MANAGER_PERSISTENCE_NAMESPACE, CHANNEL_MANAGER_PERSISTENCE_KEY)

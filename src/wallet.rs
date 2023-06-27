@@ -6,6 +6,7 @@ use lightning::chain::chaininterface::{
 	BroadcasterInterface, ConfirmationTarget, FeeEstimator, FEERATE_FLOOR_SATS_PER_KW,
 };
 
+use lightning::events::bump_transaction::{CoinSelection, CoinSelectionSource, Utxo};
 use lightning::ln::msgs::{DecodeError, UnsignedGossipMessage};
 use lightning::ln::script::ShutdownScript;
 use lightning::sign::{
@@ -21,10 +22,13 @@ use bdk::wallet::AddressIndex;
 use bdk::{FeeRate, SignOptions, SyncOptions};
 
 use bitcoin::bech32::u5;
+use bitcoin::hashes::Hash;
 use bitcoin::secp256k1::ecdh::SharedSecret;
 use bitcoin::secp256k1::ecdsa::{RecoverableSignature, Signature};
 use bitcoin::secp256k1::{PublicKey, Scalar, Secp256k1, Signing};
-use bitcoin::{LockTime, PackedLockTime, Script, Transaction, TxOut, Txid};
+use bitcoin::util::address::WitnessVersion;
+use bitcoin::util::psbt::PartiallySignedTransaction;
+use bitcoin::{LockTime, PackedLockTime, Script, Transaction, TxOut, Txid, WPubkeyHash};
 
 use std::collections::HashMap;
 use std::ops::Deref;
@@ -341,6 +345,141 @@ where
 		for e in errors {
 			log_error!(self.logger, "Failed to broadcast transaction: {}", e);
 		}
+	}
+}
+
+impl<D, L: Deref> CoinSelectionSource for Wallet<D, L>
+where
+	D: BatchDatabase,
+	L::Target: Logger,
+{
+	fn select_confirmed_utxos(
+		&self, claim_id: lightning::chain::ClaimId,
+		must_spend: &[lightning::events::bump_transaction::Input], must_pay_to: &[bitcoin::TxOut],
+		target_feerate_sat_per_1000_weight: u32,
+	) -> Result<CoinSelection, ()> {
+		let locked_wallet = self.inner.lock().unwrap();
+		let fee_rate = FeeRate::from_sat_per_kwu(target_feerate_sat_per_1000_weight as f32);
+
+		let mut tx_builder = locked_wallet.build_tx();
+		tx_builder.fee_rate(fee_rate);
+
+		for i in must_spend {
+			let mut psbt_input = bitcoin::util::psbt::Input::default();
+			psbt_input.witness_utxo = Some(i.utxo.clone());
+			tx_builder
+				.add_foreign_utxo(i.outpoint, psbt_input, i.satisfaction_weight as usize)
+				.map_err(|e| {
+					log_error!(self.logger, "Failed to add foreign UTXO: {}", e);
+				})?;
+		}
+
+		for o in must_pay_to {
+			tx_builder.add_recipient(o.script_pubkey.clone(), o.value);
+		}
+
+		match tx_builder.finish() {
+			Ok((psbt, _)) => {
+				log_trace!(self.logger, "Created PSBT: {:?}", psbt);
+
+				let mut confirmed_utxos = Vec::new();
+				debug_assert_eq!(psbt.inputs.len(), psbt.unsigned_tx.input.len());
+				for (psbt_input, tx_input) in
+					std::iter::zip(psbt.inputs.iter(), psbt.unsigned_tx.input.iter())
+				{
+					let witness_utxo =
+						psbt_input.witness_utxo.as_ref().ok_or(()).map_err(|_| {
+							log_error!(self.logger, "Failed to retrieve witness UTXO for input");
+						})?;
+					let payload =
+						bitcoin::util::address::Payload::from_script(&witness_utxo.script_pubkey)
+							.map_err(|e| {
+							log_error!(self.logger, "Failed to retrieve script payload: {}", e);
+						})?;
+
+					match payload {
+						bitcoin::util::address::Payload::WitnessProgram { version, program } => {
+							if version == WitnessVersion::V0 && program.len() == 20 {
+								let wpkh = WPubkeyHash::from_slice(&program).map_err(|e| {
+									log_error!(
+										self.logger,
+										"Failed to retrieve script payload: {}",
+										e
+									);
+								})?;
+								let utxo = Utxo::new_v0_p2wpkh(
+									tx_input.previous_output,
+									witness_utxo.value,
+									&wpkh,
+								);
+								confirmed_utxos.push(utxo);
+							} else {
+								log_error!(
+									self.logger,
+									"Unexpected program length: {}",
+									program.len()
+								);
+								return Err(());
+							}
+						}
+						_ => {
+							log_error!(
+								self.logger,
+								"Tried to use a non-witness script. This must never happen."
+							);
+							panic!("Tried to use a non-witness script. This must never happen.");
+						}
+					}
+				}
+				let total_input_value: u64 = confirmed_utxos.iter().map(|u| u.output.value).sum();
+				let total_output_value: u64 = psbt.unsigned_tx.output.iter().map(|o| o.value).sum();
+				let total_spend_value: u64 = must_pay_to.iter().map(|t| t.value).sum();
+
+				debug_assert!(total_output_value >= total_spend_value);
+				debug_assert!(total_input_value > total_output_value);
+
+				let change_output = if total_spend_value < total_input_value {
+					debug_assert!(!psbt.unsigned_tx.output.is_empty());
+					let change_output = psbt.unsigned_tx.output.last().unwrap().clone();
+
+					debug_assert_eq!(change_output.value, total_input_value - total_spend_value);
+					Some(change_output)
+				} else {
+					None
+				};
+
+				Ok(CoinSelection { confirmed_utxos, change_output })
+			}
+			Err(err) => {
+				log_error!(self.logger, "Failed to create transaction: {}", err);
+				Err(())
+			}
+		}
+	}
+
+	fn sign_tx(&self, tx: &mut Transaction) -> Result<(), ()> {
+		let locked_wallet = self.inner.lock().unwrap();
+
+		let mut psbt = PartiallySignedTransaction::from_unsigned_tx(tx.clone()).map_err(|e| {
+			log_error!(self.logger, "Failed to create PSBT: {}", e);
+		})?;
+
+		match locked_wallet.sign(&mut psbt, SignOptions::default()) {
+			Ok(finalized) => {
+				if !finalized {
+					log_error!(self.logger, "Failed to finalize PSBT.");
+					return Err(());
+				}
+			}
+			Err(err) => {
+				log_error!(self.logger, "Failed to sign transaction: {}", err);
+				return Err(());
+			}
+		}
+
+		*tx = psbt.extract_tx();
+
+		Ok(())
 	}
 }
 

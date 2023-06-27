@@ -1,6 +1,6 @@
 use crate::{
-	hex_utils, ChannelId, ChannelManager, Config, Error, KeysManager, NetworkGraph, UserChannelId,
-	Wallet,
+	hex_utils, BumpTransactionEventHandler, ChannelId, ChannelManager, Config, Error, KeysManager,
+	NetworkGraph, UserChannelId, Wallet,
 };
 
 use crate::payment_store::{
@@ -223,8 +223,9 @@ pub(crate) struct EventHandler<K: KVStore + Sync + Send, L: Deref>
 where
 	L::Target: Logger,
 {
-	wallet: Arc<Wallet<bdk::database::SqliteDatabase, L>>,
 	event_queue: Arc<EventQueue<K, L>>,
+	wallet: Arc<Wallet<bdk::database::SqliteDatabase, L>>,
+	bump_tx_event_handler: Arc<BumpTransactionEventHandler>,
 	channel_manager: Arc<ChannelManager<K>>,
 	network_graph: Arc<NetworkGraph>,
 	keys_manager: Arc<KeysManager>,
@@ -239,7 +240,8 @@ where
 	L::Target: Logger,
 {
 	pub fn new(
-		wallet: Arc<Wallet<bdk::database::SqliteDatabase, L>>, event_queue: Arc<EventQueue<K, L>>,
+		event_queue: Arc<EventQueue<K, L>>, wallet: Arc<Wallet<bdk::database::SqliteDatabase, L>>,
+		bump_tx_event_handler: Arc<BumpTransactionEventHandler>,
 		channel_manager: Arc<ChannelManager<K>>, network_graph: Arc<NetworkGraph>,
 		keys_manager: Arc<KeysManager>, payment_store: Arc<PaymentStore<K, L>>,
 		runtime: Arc<RwLock<Option<tokio::runtime::Runtime>>>, logger: L, config: Arc<Config>,
@@ -247,6 +249,7 @@ where
 		Self {
 			event_queue,
 			wallet,
+			bump_tx_event_handler,
 			channel_manager,
 			network_graph,
 			keys_manager,
@@ -760,7 +763,9 @@ where
 			}
 			LdkEvent::DiscardFunding { .. } => {}
 			LdkEvent::HTLCIntercepted { .. } => {}
-			LdkEvent::BumpTransaction(_) => {}
+			LdkEvent::BumpTransaction(bte) => {
+				self.bump_tx_event_handler.handle_event(&bte);
+			}
 		}
 	}
 }

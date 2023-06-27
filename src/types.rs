@@ -105,6 +105,14 @@ impl lightning::onion_message::MessageRouter for FakeMessageRouter {
 	}
 }
 
+pub(crate) type BumpTransactionEventHandler =
+	lightning::events::bump_transaction::BumpTransactionEventHandler<
+		Arc<Wallet<bdk::database::SqliteDatabase, Arc<FilesystemLogger>>>,
+		Arc<Wallet<bdk::database::SqliteDatabase, Arc<FilesystemLogger>>>,
+		Arc<WalletKeysManager<bdk::database::SqliteDatabase, Arc<FilesystemLogger>>>,
+		Arc<FilesystemLogger>,
+	>;
+
 /// The global identifier of a channel.
 ///
 /// Note that this will start out to be a temporary ID until channel funding negotiation is

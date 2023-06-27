@@ -118,7 +118,10 @@ use io::KVStore;
 use payment_store::PaymentStore;
 pub use payment_store::{PaymentDetails, PaymentDirection, PaymentStatus};
 use peer_store::{PeerInfo, PeerStore};
-use types::{ChainMonitor, ChannelManager, KeysManager, NetworkGraph, PeerManager, Scorer};
+use types::{
+	BumpTransactionEventHandler, ChainMonitor, ChannelManager, KeysManager, NetworkGraph,
+	PeerManager, Scorer,
+};
 pub use types::{ChannelDetails, ChannelId, PeerDetails, UserChannelId};
 use wallet::Wallet;
 
@@ -634,9 +637,17 @@ impl<K: KVStore + Sync + Send + 'static> Node<K> {
 			}
 		});
 
-		let event_handler = Arc::new(EventHandler::new(
+		let bump_tx_event_handler = Arc::new(BumpTransactionEventHandler::new(
 			Arc::clone(&self.wallet),
+			Arc::clone(&self.wallet),
+			Arc::clone(&self.keys_manager),
+			Arc::clone(&self.logger),
+		));
+
+		let event_handler = Arc::new(EventHandler::new(
 			Arc::clone(&self.event_queue),
+			Arc::clone(&self.wallet),
+			bump_tx_event_handler,
 			Arc::clone(&self.channel_manager),
 			Arc::clone(&self.network_graph),
 			Arc::clone(&self.keys_manager),
