@@ -598,6 +598,7 @@ fn build_with_store_internal<K: KVStore + Sync + Send + 'static>(
 				Arc::clone(&keys_manager),
 				user_config,
 				chain_params,
+				cur_time.as_secs() as u32,
 			)
 		}
 	};
@@ -620,10 +621,6 @@ fn build_with_store_internal<K: KVStore + Sync + Send + 'static>(
 		IgnoringMessageHandler {},
 	));
 	let ephemeral_bytes: [u8; 32] = keys_manager.get_secure_random_bytes();
-
-	let cur_time = SystemTime::now()
-		.duration_since(SystemTime::UNIX_EPOCH)
-		.map_err(|_| BuildError::InvalidSystemTime)?;
 
 	// Initialize the GossipSource
 	// Use the configured gossip source, if the user set one, otherwise default to P2PNetwork.
