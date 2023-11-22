@@ -538,3 +538,87 @@ where
 			.collect::<Vec<_>>()
 	}
 }
+
+#[cfg(test)]
+mod tests {
+	use super::OutputSweeper;
+	use crate::fee_estimator::OnchainFeeEstimator;
+	use crate::test::utils::random_storage_path;
+	use crate::wallet::{Wallet, WalletKeysManager};
+
+	use lightning::chain::BestBlock;
+	use lightning::util::test_utils::{TestBroadcaster, TestLogger, TestStore};
+	use lightning_transaction_sync::EsploraSyncClient;
+
+	use bdk::blockchain::esplora::EsploraBlockchain;
+	use bdk::database::SqliteDatabase;
+	use bdk::template::Bip84;
+
+	use bitcoin::Network;
+
+	use std::fs;
+	use std::sync::Arc;
+
+	#[test]
+	fn test_broadcasting() {
+		let storage_path = random_storage_path();
+		let seed_bytes = [42u8; 64];
+		let network = Network::Regtest;
+		let logger = Arc::new(TestLogger::new());
+		let kv_store = Arc::new(TestStore::new(false));
+
+		let genesis_block_hash = bitcoin::blockdata::constants::genesis_block(network).block_hash();
+		let best_block = BestBlock::new(genesis_block_hash, 0);
+
+		let xprv = bitcoin::util::bip32::ExtendedPrivKey::new_master(network, &seed_bytes).unwrap();
+
+		fs::create_dir_all(storage_path.clone()).unwrap();
+		let database_path = format!("{}/bdk_test_wallet.sqlite", storage_path.display());
+		let database = SqliteDatabase::new(database_path);
+
+		let bdk_wallet = bdk::Wallet::new(
+			Bip84(xprv, bdk::KeychainKind::External),
+			Some(Bip84(xprv, bdk::KeychainKind::Internal)),
+			network,
+			database,
+		)
+		.unwrap();
+
+		let tx_sync = Arc::new(EsploraSyncClient::new("asdf".to_string(), Arc::clone(&logger)));
+		let esplora_client = tx_sync.client();
+
+		let broadcaster = Arc::new(TestBroadcaster::new(network));
+		let fee_estimator =
+			Arc::new(OnchainFeeEstimator::new(esplora_client.clone(), Arc::clone(&logger)));
+
+		let blockchain = EsploraBlockchain::from_client(esplora_client.clone(), 20);
+		let wallet = Arc::new(Wallet::new(
+			blockchain,
+			bdk_wallet,
+			Arc::clone(&broadcaster),
+			Arc::clone(&fee_estimator),
+			Arc::clone(&logger),
+		));
+
+		let ldk_seed_bytes: [u8; 32] = xprv.private_key.secret_bytes();
+		let keys_manager = Arc::new(WalletKeysManager::new(
+			&ldk_seed_bytes,
+			0,
+			1,
+			Arc::clone(&wallet),
+			Arc::clone(&logger),
+		));
+
+		let sweeper = OutputSweeper::new(
+			Vec::new(),
+			wallet,
+			broadcaster,
+			fee_estimator,
+			keys_manager,
+			kv_store,
+			best_block,
+			Some(Arc::clone(&tx_sync)),
+			logger,
+		);
+	}
+}
