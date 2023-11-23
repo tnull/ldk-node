@@ -1,4 +1,4 @@
-use crate::types::{Broadcaster, Wallet};
+use crate::types::{Broadcaster, FeeEstimator, Wallet};
 use crate::{hex_utils, ChannelManager, Config, Error, KeysManager, NetworkGraph, UserChannelId};
 
 use crate::payment_store::{
@@ -11,7 +11,9 @@ use crate::io::{
 };
 use crate::logger::{log_debug, log_error, log_info, Logger};
 
-use lightning::chain::chaininterface::{BroadcasterInterface, ConfirmationTarget, FeeEstimator};
+use lightning::chain::chaininterface::{
+	BroadcasterInterface, ConfirmationTarget, FeeEstimator as LDKFeeEstimator,
+};
 use lightning::events::Event as LdkEvent;
 use lightning::events::PaymentPurpose;
 use lightning::impl_writeable_tlv_based_enum;
@@ -245,6 +247,7 @@ where
 	wallet: Arc<Wallet>,
 	channel_manager: Arc<ChannelManager<K>>,
 	tx_broadcaster: Arc<Broadcaster>,
+	fee_estimator: Arc<FeeEstimator>,
 	network_graph: Arc<NetworkGraph>,
 	keys_manager: Arc<KeysManager>,
 	payment_store: Arc<PaymentStore<K, L>>,
@@ -260,8 +263,8 @@ where
 	pub fn new(
 		event_queue: Arc<EventQueue<K, L>>, wallet: Arc<Wallet>,
 		channel_manager: Arc<ChannelManager<K>>, tx_broadcaster: Arc<Broadcaster>,
-		network_graph: Arc<NetworkGraph>, keys_manager: Arc<KeysManager>,
-		payment_store: Arc<PaymentStore<K, L>>,
+		fee_estimator: Arc<FeeEstimator>, network_graph: Arc<NetworkGraph>,
+		keys_manager: Arc<KeysManager>, payment_store: Arc<PaymentStore<K, L>>,
 		runtime: Arc<RwLock<Option<tokio::runtime::Runtime>>>, logger: L, config: Arc<Config>,
 	) -> Self {
 		Self {
@@ -269,6 +272,7 @@ where
 			wallet,
 			channel_manager,
 			tx_broadcaster,
+			fee_estimator,
 			network_graph,
 			keys_manager,
 			payment_store,
@@ -584,7 +588,7 @@ where
 
 				let output_descriptors = &outputs.iter().collect::<Vec<_>>();
 				let tx_feerate = self
-					.wallet
+					.fee_estimator
 					.get_est_sat_per_1000_weight(ConfirmationTarget::NonAnchorChannelFee);
 
 				// We set nLockTime to the current height to discourage fee sniping.
