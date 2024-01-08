@@ -37,6 +37,8 @@ pub enum Error {
 	TxSyncFailed,
 	/// A gossip updating operation failed.
 	GossipUpdateFailed,
+	/// A liquidity request operation failed.
+	LiquidityRequestFailed,
 	/// The given address is invalid.
 	InvalidAddress,
 	/// The given network address is invalid.
@@ -91,6 +93,7 @@ impl fmt::Display for Error {
 			Self::MessageSigningFailed => write!(f, "Failed to sign given message."),
 			Self::TxSyncFailed => write!(f, "Failed to sync transactions."),
 			Self::GossipUpdateFailed => write!(f, "Failed to update gossip data."),
+			Self::LiquidityRequestFailed => write!(f, "Failed to request inbound liquidity."),
 			Self::InvalidAddress => write!(f, "The given address is invalid."),
 			Self::InvalidSocketAddress => write!(f, "The given network address is invalid."),
 			Self::InvalidPublicKey => write!(f, "The given public key is invalid."),
