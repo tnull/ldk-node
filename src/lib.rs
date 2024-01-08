@@ -1577,6 +1577,75 @@ impl<K: KVStore + Sync + Send + 'static> Node<K> {
 		Ok(invoice)
 	}
 
+	/// Returns a payable invoice that can be used to request a payment of the amount given and
+	/// receive it via a newly created just-in-time (JIT) channel.
+	///
+	/// When the returned invoice is paid, the configured [LSPS2]-compliant LSP will open a channel
+	/// to us, supplying just-in-time inbound liquidity.
+	///
+	/// [LSPS2]: https://github.com/BitcoinAndLightningLayerSpecs/lsp/blob/main/LSPS2/README.md
+	pub fn receive_payment_via_jit_channel(
+		&self, amount_msat: u64, description: &str, expiry_secs: u32,
+	) -> Result<Bolt11Invoice, Error> {
+		self.receive_payment_via_jit_channel_inner(Some(amount_msat), description, expiry_secs)
+	}
+
+	fn receive_payment_via_jit_channel_inner(
+		&self, amount_msat: Option<u64>, description: &str, expiry_secs: u32,
+	) -> Result<Bolt11Invoice, Error> {
+		let (node_id, address) = self
+			.liquidity_source
+			.get_liquidity_source_details()
+			.ok_or(Error::LiquiditySourceUnavailable)?;
+
+		let rt_lock = self.runtime.read().unwrap();
+		let runtime = rt_lock.as_ref().unwrap();
+
+		let peer_info = PeerInfo { node_id, address };
+
+		let con_node_id = peer_info.node_id;
+		let con_addr = peer_info.address.clone();
+		let con_logger = Arc::clone(&self.logger);
+		let con_pm = Arc::clone(&self.peer_manager);
+
+		// We need to use our main runtime here as a local runtime might not be around to poll
+		// connection futures going forward.
+		tokio::task::block_in_place(move || {
+			runtime.block_on(async move {
+				connect_peer_if_necessary(con_node_id, con_addr, con_pm, con_logger).await
+			})
+		})?;
+
+		log_info!(self.logger, "Connected to LSP {}@{}. ", peer_info.node_id, peer_info.address);
+
+		let liquidity_source = Arc::clone(&self.liquidity_source);
+		let invoice = tokio::task::block_in_place(move || {
+			runtime.block_on(async move {
+				liquidity_source
+					.lsps2_receive_to_jit_channel(amount_msat, description, expiry_secs)
+					.await
+			})
+		})?;
+
+		// Register payment in payment store.
+		let payment_hash = PaymentHash(invoice.payment_hash().to_byte_array());
+		let payment = PaymentDetails {
+			hash: payment_hash,
+			preimage: None,
+			secret: Some(invoice.payment_secret().clone()),
+			amount_msat,
+			direction: PaymentDirection::Inbound,
+			status: PaymentStatus::Pending,
+		};
+
+		self.payment_store.insert(payment)?;
+
+		// Persist LSP peer to make sure we reconnect on restart.
+		self.peer_store.add_peer(peer_info)?;
+
+		Ok(invoice)
+	}
+
 	/// Retrieve the details of a specific payment with the given hash.
 	///
 	/// Returns `Some` if the payment was known and `None` otherwise.
