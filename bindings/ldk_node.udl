@@ -128,6 +128,7 @@ enum NodeError {
 	"InvalidNetwork",
 	"DuplicatePayment",
 	"InsufficientFunds",
+	"LiquiditySourceUnavailable",
 };
 
 [Error]
