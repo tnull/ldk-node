@@ -81,6 +81,10 @@ where
 		self.liquidity_manager.as_ref()
 	}
 
+	pub(crate) fn get_liquidity_source_details(&self) -> Option<(PublicKey, SocketAddress)> {
+		self.lsps2_service.as_ref().map(|s| (s.node_id, s.address.clone()))
+	}
+
 	pub(crate) async fn handle_next_event(&self) {
 		match self.liquidity_manager.next_event_async().await {
 			Event::LSPS2Client(LSPS2ClientEvent::OpeningParametersReady {

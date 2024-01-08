@@ -84,6 +84,10 @@ interface LDKNode {
 	Bolt11Invoice receive_payment(u64 amount_msat, [ByRef]string description, u32 expiry_secs);
 	[Throws=NodeError]
 	Bolt11Invoice receive_variable_amount_payment([ByRef]string description, u32 expiry_secs);
+	[Throws=NodeError]
+	Bolt11Invoice receive_payment_via_jit_channel(u64 amount_msat, [ByRef]string description, u32 expiry_secs);
+	[Throws=NodeError]
+	Bolt11Invoice receive_variable_amount_payment_via_jit_channel([ByRef]string description, u32 expiry_secs);
 	PaymentDetails? payment([ByRef]PaymentHash payment_hash);
 	[Throws=NodeError]
 	void remove_payment([ByRef]PaymentHash payment_hash);
