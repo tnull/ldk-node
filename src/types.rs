@@ -186,6 +186,31 @@ impl From<Network> for bitcoin::Network {
 	}
 }
 
+impl TryFrom<lightning_invoice::Currency> for Network {
+	type Error = ();
+
+	fn try_from(network: lightning_invoice::Currency) -> Result<Self, Self::Error> {
+		match network {
+			lightning_invoice::Currency::Bitcoin => Ok(Self::Bitcoin),
+			lightning_invoice::Currency::BitcoinTestnet => Ok(Self::Testnet),
+			lightning_invoice::Currency::Signet => Ok(Self::Signet),
+			lightning_invoice::Currency::Regtest => Ok(Self::Regtest),
+			_ => Err(()),
+		}
+	}
+}
+
+impl From<Network> for lightning_invoice::Currency {
+	fn from(network: Network) -> Self {
+		match network {
+			Network::Bitcoin => lightning_invoice::Currency::Bitcoin,
+			Network::Testnet => lightning_invoice::Currency::BitcoinTestnet,
+			Network::Signet => lightning_invoice::Currency::Signet,
+			Network::Regtest => lightning_invoice::Currency::Regtest,
+		}
+	}
+}
+
 impl fmt::Display for Network {
 	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
 		bitcoin::Network::from(*self).fmt(f)
