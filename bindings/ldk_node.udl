@@ -115,6 +115,7 @@ enum NodeError {
 	"MessageSigningFailed",
 	"TxSyncFailed",
 	"GossipUpdateFailed",
+	"LiquidityRequestFailed",
 	"InvalidAddress",
 	"InvalidSocketAddress",
 	"InvalidPublicKey",
