@@ -85,9 +85,7 @@ interface LDKNode {
 	[Throws=NodeError]
 	Bolt11Invoice receive_variable_amount_payment([ByRef]string description, u32 expiry_secs);
 	[Throws=NodeError]
-	Bolt11Invoice receive_payment_via_jit_channel(u64 amount_msat, [ByRef]string description, u32 expiry_secs);
-	[Throws=NodeError]
-	Bolt11Invoice receive_variable_amount_payment_via_jit_channel([ByRef]string description, u32 expiry_secs);
+	Bolt11Invoice receive_payment_via_jit_channel(u64 amount_msat, [ByRef]string description, u32 expiry_secs, u64? max_lsp_fee_limit_msat);
 	PaymentDetails? payment([ByRef]PaymentHash payment_hash);
 	[Throws=NodeError]
 	void remove_payment([ByRef]PaymentHash payment_hash);
@@ -134,6 +132,7 @@ enum NodeError {
 	"DuplicatePayment",
 	"InsufficientFunds",
 	"LiquiditySourceUnavailable",
+	"LiquidityFeeTooHigh",
 };
 
 [Error]
@@ -172,6 +171,10 @@ enum PaymentStatus {
 	"Failed",
 };
 
+enum LSPFeeLimits {
+	u64? max_total_opening_fee_msat;
+};
+
 [NonExhaustive]
 enum Network {
 	"Bitcoin",
@@ -187,6 +190,7 @@ dictionary PaymentDetails {
 	u64? amount_msat;
 	PaymentDirection direction;
 	PaymentStatus status;
+	LSPFeeLimits? lsp_fee_limits;
 };
 
 dictionary OutPoint {
