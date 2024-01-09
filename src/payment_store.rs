@@ -30,10 +30,21 @@ pub struct PaymentDetails {
 	pub direction: PaymentDirection,
 	/// The status of the payment.
 	pub status: PaymentStatus,
+	/// The maximal amount we allow our counterparty to withhold from us when forwarding the
+	/// payment.
+	///
+	/// This is usually only `Some` for payments received via a JIT-channel, in which case the first
+	/// inbound payment will pay for the LSP's channel opening fees.
+	///
+	/// See [`LdkChannelConfig::accept_underpaying_htlcs`] for more information.
+	///
+	/// [`LdkChannelConfig::accept_underpaying_htlcs`]: lightning::util::config::ChannelConfig::accept_underpaying_htlcs
+	pub maximum_counterparty_skimmed_fee_msat: Option<u64>,
 }
 
 impl_writeable_tlv_based!(PaymentDetails, {
 	(0, hash, required),
+	(1, maximum_counterparty_skimmed_fee_msat, option),
 	(2, preimage, required),
 	(4, secret, required),
 	(6, amount_msat, required),
@@ -80,6 +91,7 @@ pub(crate) struct PaymentDetailsUpdate {
 	pub amount_msat: Option<Option<u64>>,
 	pub direction: Option<PaymentDirection>,
 	pub status: Option<PaymentStatus>,
+	pub maximum_counterparty_skimmed_fee_msat: Option<Option<u64>>,
 }
 
 impl PaymentDetailsUpdate {
@@ -91,6 +103,7 @@ impl PaymentDetailsUpdate {
 			amount_msat: None,
 			direction: None,
 			status: None,
+			maximum_counterparty_skimmed_fee_msat: None,
 		}
 	}
 }
@@ -171,6 +184,13 @@ where
 				payment.status = status;
 			}
 
+			if let Some(maximum_counterparty_skimmed_fee_msat) =
+				update.maximum_counterparty_skimmed_fee_msat
+			{
+				payment.maximum_counterparty_skimmed_fee_msat =
+					maximum_counterparty_skimmed_fee_msat
+			}
+
 			self.persist_info(&update.hash, payment)?;
 			updated = true;
 		}
@@ -247,6 +267,7 @@ mod tests {
 			amount_msat: None,
 			direction: PaymentDirection::Inbound,
 			status: PaymentStatus::Pending,
+			maximum_counterparty_skimmed_fee_msat: None,
 		};
 
 		assert_eq!(Ok(false), payment_store.insert(payment.clone()));

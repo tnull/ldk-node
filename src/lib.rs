@@ -1197,6 +1197,7 @@ impl<K: KVStore + Sync + Send + 'static> Node<K> {
 					amount_msat: invoice.amount_milli_satoshis(),
 					direction: PaymentDirection::Outbound,
 					status: PaymentStatus::Pending,
+					maximum_counterparty_skimmed_fee_msat: None,
 				};
 				self.payment_store.insert(payment)?;
 
@@ -1216,6 +1217,7 @@ impl<K: KVStore + Sync + Send + 'static> Node<K> {
 							amount_msat: invoice.amount_milli_satoshis(),
 							direction: PaymentDirection::Outbound,
 							status: PaymentStatus::Failed,
+							maximum_counterparty_skimmed_fee_msat: None,
 						};
 
 						self.payment_store.insert(payment)?;
@@ -1303,6 +1305,7 @@ impl<K: KVStore + Sync + Send + 'static> Node<K> {
 					amount_msat: Some(amount_msat),
 					direction: PaymentDirection::Outbound,
 					status: PaymentStatus::Pending,
+					maximum_counterparty_skimmed_fee_msat: None,
 				};
 				self.payment_store.insert(payment)?;
 
@@ -1323,6 +1326,7 @@ impl<K: KVStore + Sync + Send + 'static> Node<K> {
 							amount_msat: Some(amount_msat),
 							direction: PaymentDirection::Outbound,
 							status: PaymentStatus::Failed,
+							maximum_counterparty_skimmed_fee_msat: None,
 						};
 						self.payment_store.insert(payment)?;
 
@@ -1377,6 +1381,7 @@ impl<K: KVStore + Sync + Send + 'static> Node<K> {
 					status: PaymentStatus::Pending,
 					direction: PaymentDirection::Outbound,
 					amount_msat: Some(amount_msat),
+					maximum_counterparty_skimmed_fee_msat: None,
 				};
 				self.payment_store.insert(payment)?;
 
@@ -1397,6 +1402,7 @@ impl<K: KVStore + Sync + Send + 'static> Node<K> {
 							status: PaymentStatus::Failed,
 							direction: PaymentDirection::Outbound,
 							amount_msat: Some(amount_msat),
+							maximum_counterparty_skimmed_fee_msat: None,
 						};
 
 						self.payment_store.insert(payment)?;
@@ -1570,6 +1576,7 @@ impl<K: KVStore + Sync + Send + 'static> Node<K> {
 			amount_msat,
 			direction: PaymentDirection::Inbound,
 			status: PaymentStatus::Pending,
+			maximum_counterparty_skimmed_fee_msat: None,
 		};
 
 		self.payment_store.insert(payment)?;
@@ -1583,15 +1590,25 @@ impl<K: KVStore + Sync + Send + 'static> Node<K> {
 	/// When the returned invoice is paid, the configured [LSPS2]-compliant LSP will open a channel
 	/// to us, supplying just-in-time inbound liquidity.
 	///
+	/// If set, `max_lsp_fee_limit_msat` will limit how much fee we allow the LSP to take for opening the
+	/// channel to us. We'll use its cheapest offer otherwise.
+	///
 	/// [LSPS2]: https://github.com/BitcoinAndLightningLayerSpecs/lsp/blob/main/LSPS2/README.md
 	pub fn receive_payment_via_jit_channel(
 		&self, amount_msat: u64, description: &str, expiry_secs: u32,
+		max_lsp_fee_limit_msat: Option<u64>,
 	) -> Result<Bolt11Invoice, Error> {
-		self.receive_payment_via_jit_channel_inner(Some(amount_msat), description, expiry_secs)
+		self.receive_payment_via_jit_channel_inner(
+			Some(amount_msat),
+			description,
+			expiry_secs,
+			max_lsp_fee_limit_msat,
+		)
 	}
 
 	fn receive_payment_via_jit_channel_inner(
 		&self, amount_msat: Option<u64>, description: &str, expiry_secs: u32,
+		max_lsp_fee_limit_msat: Option<u64>,
 	) -> Result<Bolt11Invoice, Error> {
 		let liquidity_source =
 			self.liquidity_source.as_ref().ok_or(Error::LiquiditySourceUnavailable)?;
@@ -1621,10 +1638,15 @@ impl<K: KVStore + Sync + Send + 'static> Node<K> {
 		log_info!(self.logger, "Connected to LSP {}@{}. ", peer_info.node_id, peer_info.address);
 
 		let liquidity_source = Arc::clone(&liquidity_source);
-		let invoice = tokio::task::block_in_place(move || {
+		let (invoice, lsp_opening_fee) = tokio::task::block_in_place(move || {
 			runtime.block_on(async move {
 				liquidity_source
-					.lsps2_receive_to_jit_channel(amount_msat, description, expiry_secs)
+					.lsps2_receive_to_jit_channel(
+						amount_msat,
+						description,
+						expiry_secs,
+						max_lsp_fee_limit_msat,
+					)
 					.await
 			})
 		})?;
@@ -1638,6 +1660,7 @@ impl<K: KVStore + Sync + Send + 'static> Node<K> {
 			amount_msat,
 			direction: PaymentDirection::Inbound,
 			status: PaymentStatus::Pending,
+			maximum_counterparty_skimmed_fee_msat: Some(lsp_opening_fee),
 		};
 
 		self.payment_store.insert(payment)?;
