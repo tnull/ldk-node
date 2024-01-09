@@ -190,7 +190,8 @@ where
 
 	pub(crate) async fn lsps2_receive_to_jit_channel(
 		&self, amount_msat: Option<u64>, description: &str, expiry_secs: u32,
-	) -> Result<Bolt11Invoice, Error> {
+		max_total_lsp_fee_limit_msat: Option<u64>,
+	) -> Result<(Bolt11Invoice, u64), Error> {
 		let lsps2_service = self.lsps2_service.as_ref().ok_or(Error::LiquiditySourceUnavailable)?;
 
 		let fee_response = self.request_opening_fee_params().await?;
@@ -225,6 +226,13 @@ where
 				log_error!(self.logger, "Failed to handle response from liquidity service",);
 				Error::LiquidityRequestFailed
 			})?;
+
+		if let Some(max_total_lsp_fee_limit_msat) = max_total_lsp_fee_limit_msat {
+			if min_opening_fee_msat > max_total_lsp_fee_limit_msat {
+				log_error!(self.logger, "Failed to request inbound JIT channel as LSP's requested opening fee of {}msat exceeds our fee limit of {}msat", min_opening_fee_msat, max_total_lsp_fee_limit_msat);
+				return Err(Error::LiquidityFeeTooHigh);
+			}
+		}
 
 		log_debug!(
 			self.logger,
@@ -283,7 +291,7 @@ where
 			})?;
 
 		log_info!(self.logger, "JIT-channel invoice created: {}", invoice);
-		Ok(invoice)
+		Ok((invoice, min_opening_fee_msat))
 	}
 
 	async fn request_opening_fee_params(&self) -> Result<LSPS2FeeResponse, Error> {
