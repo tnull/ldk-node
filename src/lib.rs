@@ -1606,6 +1606,28 @@ impl<K: KVStore + Sync + Send + 'static> Node<K> {
 		)
 	}
 
+	///// Returns a payable invoice that can be used to request a variable amount payment (also known
+	///// as "zero-amount" invoice) and receive it via a newly created just-in-time (JIT) channel.
+	/////
+	///// When the returned invoice is paid, the configured [LSPS2]-compliant LSP will open a channel
+	///// to us, supplying just-in-time inbound liquidity.
+	/////
+	/////
+	///// If set, `max_lsp_fee_limit_msat` will limit how much fee we allow the LSP to take for opening the
+	///// channel to us. We'll use its cheapest offer otherwise.
+	/////
+	///// [LSPS2]: https://github.com/BitcoinAndLightningLayerSpecs/lsp/blob/main/LSPS2/README.md
+	//pub fn receive_variable_amount_payment_via_jit_channel(
+	//	&self, description: &str, expiry_secs: u32, max_lsp_fee_limit_msat: Option<u64>,
+	//) -> Result<Bolt11Invoice, Error> {
+	//	self.receive_payment_via_jit_channel_inner(
+	//		None,
+	//		description,
+	//		expiry_secs,
+	//		max_lsp_fee_limit_msat,
+	//	)
+	//}
+
 	fn receive_payment_via_jit_channel_inner(
 		&self, amount_msat: Option<u64>, description: &str, expiry_secs: u32,
 		max_lsp_fee_limit_msat: Option<u64>,
