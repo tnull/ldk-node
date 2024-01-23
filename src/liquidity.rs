@@ -54,20 +54,17 @@ where
 
 	pub(crate) async fn handle_next_event(&self) {
 		match self.liquidity_manager.next_event_async().await {
-			Event::LSPS2Client(LSPS2ClientEvent::GetInfoResponse {
-				jit_channel_id: _,
+			Event::LSPS2Client(LSPS2ClientEvent::OpeningParametersReady {
 				counterparty_node_id: _,
 				opening_fee_params_menu: _,
 				min_payment_size_msat: _,
 				max_payment_size_msat: _,
-				user_channel_id: _,
 			}) => {}
-			Event::LSPS2Client(LSPS2ClientEvent::InvoiceGenerationReady {
+			Event::LSPS2Client(LSPS2ClientEvent::InvoiceParametersReady {
 				counterparty_node_id: _,
 				intercept_scid: _,
 				cltv_expiry_delta: _,
 				payment_size_msat: _,
-				client_trusts_lsp: _,
 				user_channel_id: _,
 			}) => {}
 			_ => {}
