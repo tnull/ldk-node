@@ -188,41 +188,8 @@ where
 		&self, amount_msat: Option<u64>, description: &str, expiry_secs: u32,
 	) -> Result<Bolt11Invoice, Error> {
 		let lsps2_service = self.lsps2_service.as_ref().ok_or(Error::LiquiditySourceUnavailable)?;
-		let user_channel_id: u128 = rand::thread_rng().gen::<u128>();
 
-		let (fee_request_sender, fee_request_receiver) = oneshot::channel();
-		lsps2_service
-			.pending_fee_requests
-			.lock()
-			.unwrap()
-			.insert(user_channel_id, fee_request_sender);
-
-		let client_handler = self.liquidity_manager.lsps2_client_handler().ok_or_else(|| {
-			log_error!(self.logger, "Liquidity client was not configured.",);
-			Error::LiquiditySourceUnavailable
-		})?;
-
-		client_handler.create_invoice(
-			lsps2_service.node_id,
-			amount_msat,
-			lsps2_service.token.clone(),
-			user_channel_id,
-		);
-
-		let fee_response = tokio::time::timeout(
-			Duration::from_secs(LIQUIDITY_REQUEST_TIMEOUT_SECS),
-			fee_request_receiver,
-		)
-		.await
-		.map_err(|e| {
-			log_error!(self.logger, "Liquidity request timed out: {}", e);
-			Error::LiquidityRequestFailed
-		})?
-		.map_err(|e| {
-			log_error!(self.logger, "Failed to handle response from liquidity service: {:?}", e);
-			Error::LiquidityRequestFailed
-		})?;
-		debug_assert_eq!(fee_response.user_channel_id, user_channel_id);
+		let fee_response = self.request_opening_fee_params().await?;
 
 		if let Some(amount_msat) = amount_msat {
 			if amount_msat < fee_response.min_payment_size_msat
@@ -261,38 +228,7 @@ where
 			min_opening_fee_msat
 		);
 
-		let (buy_request_sender, buy_request_receiver) = oneshot::channel();
-		lsps2_service
-			.pending_buy_requests
-			.lock()
-			.unwrap()
-			.insert(user_channel_id, buy_request_sender);
-
-		client_handler
-			.opening_fee_params_selected(
-				lsps2_service.node_id,
-				fee_response.jit_channel_id,
-				min_opening_params.clone(),
-			)
-			.map_err(|e| {
-				log_error!(self.logger, "Failed to send buy request to liquidity service: {:?}", e);
-				Error::LiquidityRequestFailed
-			})?;
-
-		let buy_response = tokio::time::timeout(
-			Duration::from_secs(LIQUIDITY_REQUEST_TIMEOUT_SECS),
-			buy_request_receiver,
-		)
-		.await
-		.map_err(|e| {
-			log_error!(self.logger, "Liquidity request timed out: {}", e);
-			Error::LiquidityRequestFailed
-		})?
-		.map_err(|e| {
-			log_error!(self.logger, "Failed to handle response from liquidity service: {:?}", e);
-			Error::LiquidityRequestFailed
-		})?;
-		debug_assert_eq!(buy_response.user_channel_id, user_channel_id);
+		let buy_response = self.send_buy_request(amount_msat, min_opening_params.clone()).await?;
 
 		// LSPS2 requires min_final_cltv_expiry_delta to be at least 2 more than usual.
 		let min_final_cltv_expiry_delta = MIN_FINAL_CLTV_EXPIRY_DELTA + 2;
@@ -344,6 +280,82 @@ where
 
 		log_info!(self.logger, "JIT-channel invoice created: {}", invoice);
 		Ok(invoice)
+	}
+
+	async fn request_opening_fee_params(&self) -> Result<LSPS2FeeResponse, Error> {
+		let lsps2_service = self.lsps2_service.as_ref().ok_or(Error::LiquiditySourceUnavailable)?;
+
+		let client_handler = self.liquidity_manager.lsps2_client_handler().ok_or_else(|| {
+			log_error!(self.logger, "Liquidity client was not configured.",);
+			Error::LiquiditySourceUnavailable
+		})?;
+
+		client_handler.request_opening_params(lsps2_service.node_id, lsps2_service.token.clone());
+
+		let mut fee_request_receiver = lsps2_service.pending_fee_request_receiver.lock().unwrap();
+		tokio::time::timeout(
+			Duration::from_secs(LIQUIDITY_REQUEST_TIMEOUT_SECS),
+			fee_request_receiver.recv(),
+		)
+		.await
+		.map_err(|e| {
+			log_error!(self.logger, "Liquidity request timed out: {}", e);
+			Error::LiquidityRequestFailed
+		})?
+		.ok_or_else(|| {
+			log_error!(self.logger, "Failed to handle response from liquidity service");
+			Error::LiquidityRequestFailed
+		})
+	}
+
+	async fn send_buy_request(
+		&self, amount_msat: Option<u64>, opening_fee_params: OpeningFeeParams,
+	) -> Result<LSPS2BuyResponse, Error> {
+		let lsps2_service = self.lsps2_service.as_ref().ok_or(Error::LiquiditySourceUnavailable)?;
+
+		let client_handler = self.liquidity_manager.lsps2_client_handler().ok_or_else(|| {
+			log_error!(self.logger, "Liquidity client was not configured.",);
+			Error::LiquiditySourceUnavailable
+		})?;
+
+		let user_channel_id: u128 = rand::thread_rng().gen::<u128>();
+
+		let (buy_request_sender, buy_request_receiver) = oneshot::channel();
+		lsps2_service
+			.pending_buy_requests
+			.lock()
+			.unwrap()
+			.insert(user_channel_id, buy_request_sender);
+
+		client_handler
+			.select_opening_params(
+				lsps2_service.node_id,
+				user_channel_id,
+				amount_msat,
+				opening_fee_params,
+			)
+			.map_err(|e| {
+				log_error!(self.logger, "Failed to send buy request to liquidity service: {:?}", e);
+				Error::LiquidityRequestFailed
+			})?;
+
+		let buy_response = tokio::time::timeout(
+			Duration::from_secs(LIQUIDITY_REQUEST_TIMEOUT_SECS),
+			buy_request_receiver,
+		)
+		.await
+		.map_err(|e| {
+			log_error!(self.logger, "Liquidity request timed out: {}", e);
+			Error::LiquidityRequestFailed
+		})?
+		.map_err(|e| {
+			log_error!(self.logger, "Failed to handle response from liquidity service: {:?}", e);
+			Error::LiquidityRequestFailed
+		})?;
+
+		debug_assert_eq!(buy_response.user_channel_id, user_channel_id);
+
+		Ok(buy_response)
 	}
 }
 
