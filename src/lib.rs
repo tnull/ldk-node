@@ -1593,8 +1593,10 @@ impl<K: KVStore + Sync + Send + 'static> Node<K> {
 	fn receive_payment_via_jit_channel_inner(
 		&self, amount_msat: Option<u64>, description: &str, expiry_secs: u32,
 	) -> Result<Bolt11Invoice, Error> {
-		let (node_id, address) = self
-			.liquidity_source
+		let liquidity_source =
+			self.liquidity_source.as_ref().ok_or(Error::LiquiditySourceUnavailable)?;
+
+		let (node_id, address) = liquidity_source
 			.get_liquidity_source_details()
 			.ok_or(Error::LiquiditySourceUnavailable)?;
 
@@ -1618,7 +1620,7 @@ impl<K: KVStore + Sync + Send + 'static> Node<K> {
 
 		log_info!(self.logger, "Connected to LSP {}@{}. ", peer_info.node_id, peer_info.address);
 
-		let liquidity_source = Arc::clone(&self.liquidity_source);
+		let liquidity_source = Arc::clone(&liquidity_source);
 		let invoice = tokio::task::block_in_place(move || {
 			runtime.block_on(async move {
 				liquidity_source

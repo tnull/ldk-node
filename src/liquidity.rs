@@ -82,10 +82,7 @@ where
 	}
 
 	pub(crate) fn get_liquidity_source_details(&self) -> Option<(PublicKey, SocketAddress)> {
-		match self {
-			Self::None => None,
-			Self::LSPS2 { node_id, address, .. } => Some((*node_id, address.clone())),
-		}
+		self.lsps2_service.as_ref().map(|s| (s.node_id, s.address.clone()))
 	}
 
 	pub(crate) async fn handle_next_event(&self) {
