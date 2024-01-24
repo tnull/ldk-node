@@ -175,14 +175,6 @@ dictionary LSPFeeLimits {
 	u64? max_total_opening_fee_msat;
 };
 
-[NonExhaustive]
-enum Network {
-	"Bitcoin",
-	"Testnet",
-	"Signet",
-	"Regtest",
-};
-
 dictionary PaymentDetails {
 	PaymentHash hash;
 	PaymentPreimage? preimage;
@@ -191,6 +183,14 @@ dictionary PaymentDetails {
 	PaymentDirection direction;
 	PaymentStatus status;
 	LSPFeeLimits? lsp_fee_limits;
+};
+
+[NonExhaustive]
+enum Network {
+	"Bitcoin",
+	"Testnet",
+	"Signet",
+	"Regtest",
 };
 
 dictionary OutPoint {
