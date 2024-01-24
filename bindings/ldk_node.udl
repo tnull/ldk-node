@@ -171,7 +171,7 @@ enum PaymentStatus {
 	"Failed",
 };
 
-enum LSPFeeLimits {
+dictionary LSPFeeLimits {
 	u64? max_total_opening_fee_msat;
 };
 
