@@ -950,7 +950,7 @@ impl<K: KVStore + Sync + Send + 'static> Node<K> {
 	/// channel counterparty on channel open. This can be useful to start out with the balance not
 	/// entirely shifted to one side, therefore allowing to receive payments from the getgo.
 	///
-	/// Returns a non-public [`UserChannelId`] allowing to locally keep track of the channel.
+	/// Returns a [`UserChannelId`] allowing to locally keep track of the channel.
 	pub fn connect_open_channel(
 		&self, node_id: PublicKey, address: SocketAddress, channel_amount_sats: u64,
 		push_to_counterparty_msat: Option<u64>, channel_config: Option<Arc<ChannelConfig>>,
