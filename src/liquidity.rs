@@ -23,7 +23,7 @@ struct LSPS2Service {
 	node_id: PublicKey,
 	token: Option<String>,
 	pending_fee_requests: Mutex<HashMap<RequestId, oneshot::Sender<LSPS2FeeResponse>>>,
-	pending_buy_requests: Mutex<HashMap<u128, oneshot::Sender<LSPS2BuyResponse>>>,
+	pending_buy_requests: Mutex<HashMap<RequestId, oneshot::Sender<LSPS2BuyResponse>>>,
 }
 
 pub(crate) struct LiquiditySource<K: KVStore + Sync + Send + 'static, L: Deref>
@@ -127,10 +127,10 @@ where
 				}
 			}
 			Event::LSPS2Client(LSPS2ClientEvent::InvoiceParametersReady {
+				request_id,
 				counterparty_node_id,
 				intercept_scid,
 				cltv_expiry_delta,
-				user_channel_id,
 				..
 			}) => {
 				if let Some(lsps2_service) = self.lsps2_service.as_ref() {
@@ -147,10 +147,9 @@ where
 					}
 
 					if let Some(sender) =
-						lsps2_service.pending_buy_requests.lock().unwrap().remove(&user_channel_id)
+						lsps2_service.pending_buy_requests.lock().unwrap().remove(&request_id)
 					{
-						let response =
-							LSPS2BuyResponse { intercept_scid, cltv_expiry_delta, user_channel_id };
+						let response = LSPS2BuyResponse { intercept_scid, cltv_expiry_delta };
 
 						match sender.send(response) {
 							Ok(()) => (),
@@ -197,5 +196,4 @@ pub(crate) struct LSPS2FeeResponse {
 pub(crate) struct LSPS2BuyResponse {
 	intercept_scid: u64,
 	cltv_expiry_delta: u32,
-	user_channel_id: u128,
 }
