@@ -48,7 +48,7 @@ where
 		self.liquidity_manager.set_process_msgs_callback(process_msgs_callback);
 	}
 
-	pub(crate) fn get_liquidity_manager(&self) -> &LiquidityManager<K> {
+	pub(crate) fn liquidity_manager(&self) -> &LiquidityManager<K> {
 		self.liquidity_manager.as_ref()
 	}
 
