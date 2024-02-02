@@ -293,20 +293,25 @@ where
 			Error::LiquiditySourceUnavailable
 		})?;
 
-		client_handler.request_opening_params(lsps2_service.node_id, lsps2_service.token.clone());
+		let (fee_request_sender, fee_request_receiver) = oneshot::channel();
+		{
+			let mut pending_fee_requests_lock = lsps2_service.pending_fee_requests.lock().unwrap();
+			let request_id = client_handler
+				.request_opening_params(lsps2_service.node_id, lsps2_service.token.clone());
+			pending_fee_requests_lock.insert(request_id, fee_request_sender);
+		}
 
-		let mut fee_request_receiver = lsps2_service.pending_fee_request_receiver.lock().unwrap();
 		tokio::time::timeout(
 			Duration::from_secs(LIQUIDITY_REQUEST_TIMEOUT_SECS),
-			fee_request_receiver.recv(),
+			fee_request_receiver,
 		)
 		.await
 		.map_err(|e| {
 			log_error!(self.logger, "Liquidity request timed out: {}", e);
 			Error::LiquidityRequestFailed
 		})?
-		.ok_or_else(|| {
-			log_error!(self.logger, "Failed to handle response from liquidity service");
+		.map_err(|e| {
+			log_error!(self.logger, "Failed to handle response from liquidity service: {}", e);
 			Error::LiquidityRequestFailed
 		})
 	}
