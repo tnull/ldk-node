@@ -800,7 +800,7 @@ fn build_with_store_internal<K: KVStore + Sync + Send + 'static>(
 
 	let liquidity_source = liquidity_source_config.as_ref().and_then(|lsc| {
 		lsc.lsps2_service.as_ref().map(|(address, node_id, token)| {
-			let lsps2_client_config = Some(LSPS2ClientConfig { client_trusts_lsp: true });
+			let lsps2_client_config = Some(LSPS2ClientConfig {});
 			let liquidity_client_config = Some(LiquidityClientConfig { lsps2_client_config });
 			let liquidity_manager = Arc::new(LiquidityManager::new(
 				Arc::clone(&keys_manager),
