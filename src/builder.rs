@@ -816,7 +816,7 @@ fn build_with_store_internal<K: KVStore + Sync + Send + 'static>(
 				token.clone(),
 				Arc::clone(&channel_manager),
 				Arc::clone(&keys_manager),
-				Arc::clone(&liquidity_manager),
+				liquidity_manager,
 				Arc::clone(&config),
 				Arc::clone(&logger),
 			))
