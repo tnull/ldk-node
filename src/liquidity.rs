@@ -18,8 +18,6 @@ use bitcoin::secp256k1::{PublicKey, Secp256k1};
 
 use tokio::sync::oneshot;
 
-use rand::Rng;
-
 use std::collections::HashMap;
 use std::ops::Deref;
 use std::sync::{Arc, Mutex};
@@ -326,26 +324,21 @@ where
 			Error::LiquiditySourceUnavailable
 		})?;
 
-		let user_channel_id: u128 = rand::thread_rng().gen::<u128>();
-
 		let (buy_request_sender, buy_request_receiver) = oneshot::channel();
-		lsps2_service
-			.pending_buy_requests
-			.lock()
-			.unwrap()
-			.insert(user_channel_id, buy_request_sender);
-
-		client_handler
-			.select_opening_params(
-				lsps2_service.node_id,
-				user_channel_id,
-				amount_msat,
-				opening_fee_params,
-			)
-			.map_err(|e| {
-				log_error!(self.logger, "Failed to send buy request to liquidity service: {:?}", e);
-				Error::LiquidityRequestFailed
-			})?;
+		{
+			let mut pending_buy_requests_lock = lsps2_service.pending_buy_requests.lock().unwrap();
+			let request_id = client_handler
+				.select_opening_params(lsps2_service.node_id, amount_msat, opening_fee_params)
+				.map_err(|e| {
+					log_error!(
+						self.logger,
+						"Failed to send buy request to liquidity service: {:?}",
+						e
+					);
+					Error::LiquidityRequestFailed
+				})?;
+			pending_buy_requests_lock.insert(request_id, buy_request_sender);
+		}
 
 		let buy_response = tokio::time::timeout(
 			Duration::from_secs(LIQUIDITY_REQUEST_TIMEOUT_SECS),
@@ -360,8 +353,6 @@ where
 			log_error!(self.logger, "Failed to handle response from liquidity service: {:?}", e);
 			Error::LiquidityRequestFailed
 		})?;
-
-		debug_assert_eq!(buy_response.user_channel_id, user_channel_id);
 
 		Ok(buy_response)
 	}
