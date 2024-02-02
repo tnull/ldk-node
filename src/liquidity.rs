@@ -6,25 +6,23 @@ use lightning::ln::msgs::SocketAddress;
 use lightning::util::logger::Logger;
 use lightning::util::persist::KVStore;
 use lightning_liquidity::events::Event;
+use lightning_liquidity::lsps0::msgs::RequestId;
 use lightning_liquidity::lsps2::event::LSPS2ClientEvent;
 use lightning_liquidity::lsps2::msgs::OpeningFeeParams;
 
 use bitcoin::secp256k1::PublicKey;
 
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::oneshot;
 
 use std::collections::HashMap;
 use std::ops::Deref;
 use std::sync::{Arc, Mutex};
 
-const MAX_PENDING_FEE_REQUESTS: usize = 100;
-
 struct LSPS2Service {
 	address: SocketAddress,
 	node_id: PublicKey,
 	token: Option<String>,
-	pending_fee_request_sender: mpsc::Sender<LSPS2FeeResponse>,
-	pending_fee_request_receiver: Mutex<mpsc::Receiver<LSPS2FeeResponse>>,
+	pending_fee_requests: Mutex<HashMap<RequestId, oneshot::Sender<LSPS2FeeResponse>>>,
 	pending_buy_requests: Mutex<HashMap<u128, oneshot::Sender<LSPS2BuyResponse>>>,
 }
 
@@ -49,15 +47,13 @@ where
 		channel_manager: Arc<ChannelManager<K>>, keys_manager: Arc<KeysManager>,
 		liquidity_manager: Arc<LiquidityManager<K>>, config: Arc<Config>, logger: L,
 	) -> Self {
-		let (pending_fee_request_sender, rx) = mpsc::channel(MAX_PENDING_FEE_REQUESTS);
-		let pending_fee_request_receiver = Mutex::new(rx);
+		let pending_fee_requests = Mutex::new(HashMap::new());
 		let pending_buy_requests = Mutex::new(HashMap::new());
 		let lsps2_service = Some(LSPS2Service {
 			address,
 			node_id,
 			token,
-			pending_fee_request_sender,
-			pending_fee_request_receiver,
+			pending_fee_requests,
 			pending_buy_requests,
 		});
 		Self { lsps2_service, channel_manager, keys_manager, liquidity_manager, config, logger }
@@ -75,6 +71,7 @@ where
 	pub(crate) async fn handle_next_event(&self) {
 		match self.liquidity_manager.next_event_async().await {
 			Event::LSPS2Client(LSPS2ClientEvent::OpeningParametersReady {
+				request_id,
 				counterparty_node_id,
 				opening_fee_params_menu,
 				min_payment_size_msat,
@@ -93,26 +90,39 @@ where
 						return;
 					}
 
-					let response = LSPS2FeeResponse {
-						opening_fee_params_menu,
-						min_payment_size_msat,
-						max_payment_size_msat,
-					};
+					if let Some(sender) =
+						lsps2_service.pending_fee_requests.lock().unwrap().remove(&request_id)
+					{
+						let response = LSPS2FeeResponse {
+							opening_fee_params_menu,
+							min_payment_size_msat,
+							max_payment_size_msat,
+						};
 
-					match lsps2_service.pending_fee_request_sender.send(response).await {
-						Ok(()) => (),
-						Err(e) => {
-							log_error!(
-								self.logger,
-								"Failed to handle response from liquidity service: {:?}",
-								e
-							);
+						match sender.send(response) {
+							Ok(()) => (),
+							Err(e) => {
+								log_error!(
+									self.logger,
+									"Failed to handle response from liquidity service: {:?}",
+									e
+								);
+							}
 						}
+					} else {
+						debug_assert!(
+							false,
+							"Received response from liquidity service for unknown request."
+						);
+						log_error!(
+							self.logger,
+							"Received response from liquidity service for unknown request."
+						);
 					}
 				} else {
 					log_error!(
 						self.logger,
-						"Received unexpected LSPS2Client::GetInfoResponse event!"
+						"Received unexpected LSPS2Client::OpeningParametersReady event!"
 					);
 				}
 			}
@@ -165,7 +175,7 @@ where
 				} else {
 					log_error!(
 						self.logger,
-						"Received unexpected LSPS2Client::InvoiceGenerationReady event!"
+						"Received unexpected LSPS2Client::InvoiceParametersReady event!"
 					);
 				}
 			}
