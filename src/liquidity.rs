@@ -205,8 +205,8 @@ where
 		let fee_computation_amount = amount_msat.unwrap_or(1_000_000);
 		let (min_opening_fee_msat, min_opening_params) = fee_response
 			.opening_fee_params_menu
-			.iter()
-			.flat_map(|params| {
+			.into_iter()
+			.filter_map(|params| {
 				if let Some(fee) = compute_opening_fee(
 					fee_computation_amount,
 					params.min_fee_msat,
@@ -229,7 +229,7 @@ where
 			min_opening_fee_msat
 		);
 
-		let buy_response = self.send_buy_request(amount_msat, min_opening_params.clone()).await?;
+		let buy_response = self.send_buy_request(amount_msat, min_opening_params).await?;
 
 		// LSPS2 requires min_final_cltv_expiry_delta to be at least 2 more than usual.
 		let min_final_cltv_expiry_delta = MIN_FINAL_CLTV_EXPIRY_DELTA + 2;
