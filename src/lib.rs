@@ -1639,23 +1639,31 @@ impl<K: KVStore + Sync + Send + 'static> Node<K> {
 		log_info!(self.logger, "Connected to LSP {}@{}. ", peer_info.node_id, peer_info.address);
 
 		let liquidity_source = Arc::clone(&liquidity_source);
-		let (invoice, lsp_opening_fee) = tokio::task::block_in_place(move || {
-			runtime.block_on(async move {
-				liquidity_source
-					.lsps2_receive_to_jit_channel(
-						amount_msat,
-						description,
-						expiry_secs,
-						max_total_lsp_fee_limit_msat,
-					)
-					.await
-			})
-		})?;
+		let (invoice, lsp_total_opening_fee) =
+			tokio::task::block_in_place(move || {
+				runtime.block_on(async move {
+					if let Some(amount_msat) = amount_msat {
+						liquidity_source
+							.lsps2_receive_to_jit_channel(
+								amount_msat,
+								description,
+								expiry_secs,
+								max_total_lsp_fee_limit_msat,
+							)
+							.await
+							.map(|(invoice, total_fee)| (invoice, Some(total_fee)))
+					} else {
+						// TODO: will be implemented in the next commit
+						Err(Error::LiquidityRequestFailed)
+					}
+				})
+			})?;
 
 		// Register payment in payment store.
 		let payment_hash = PaymentHash(invoice.payment_hash().to_byte_array());
-		let lsp_fee_limits =
-			Some(LSPFeeLimits { max_total_opening_fee_msat: Some(lsp_opening_fee) });
+		let lsp_fee_limits = Some(LSPFeeLimits {
+			max_total_opening_fee_msat: lsp_total_opening_fee,
+		});
 		let payment = PaymentDetails {
 			hash: payment_hash,
 			preimage: None,
