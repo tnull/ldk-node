@@ -390,7 +390,7 @@ where
 							hex_utils::to_string(&payment_hash.0),
 							counterparty_skimmed_fee_msat,
 							max_total_opening_fee_msat,
-							);
+						);
 						self.channel_manager.fail_htlc_backwards(&payment_hash);
 
 						let update = PaymentDetailsUpdate {
