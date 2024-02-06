@@ -209,15 +209,8 @@ where
 			.opening_fee_params_menu
 			.into_iter()
 			.filter_map(|params| {
-				if let Some(fee) = compute_opening_fee(
-					amount_msat,
-					params.min_fee_msat,
-					params.proportional as u64,
-				) {
-					Some((fee, params))
-				} else {
-					None
-				}
+				compute_opening_fee(amount_msat, params.min_fee_msat, params.proportional as u64)
+					.map(|fee| (fee, params))
 			})
 			.min_by_key(|p| p.0)
 			.ok_or_else(|| {
