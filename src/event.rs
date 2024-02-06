@@ -382,19 +382,17 @@ where
 						return;
 					}
 
-					let max_total_opening_fee_msat = if let Some(max_total_opening_fee_msat) =
-						info.lsp_fee_limits.and_then(|l| l.max_total_opening_fee_msat)
-					{
-						max_total_opening_fee_msat
-					} else if let Some(max_proportional_opening_fee_ppm_msat) =
-						info.lsp_fee_limits.and_then(|l| l.max_proportional_opening_fee_ppm_msat)
-					{
-						// If it's a variable amount payment, compute the actual total opening fee.
-						compute_opening_fee(amount_msat, 0, max_proportional_opening_fee_ppm_msat)
-							.unwrap_or(0)
-					} else {
-						0
-					};
+					let max_total_opening_fee_msat = info
+						.lsp_fee_limits
+						.and_then(|l| {
+							l.max_total_opening_fee_msat.or_else(|| {
+								l.max_proportional_opening_fee_ppm_msat.and_then(|max_prop_fee| {
+									// If it's a variable amount payment, compute the actual fee.
+									compute_opening_fee(amount_msat, 0, max_prop_fee)
+								})
+							})
+						})
+						.unwrap_or(0);
 
 					if counterparty_skimmed_fee_msat > max_total_opening_fee_msat {
 						log_info!(
