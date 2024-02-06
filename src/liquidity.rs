@@ -69,16 +69,15 @@ where
 	}
 
 	pub(crate) async fn handle_next_event(&self) {
-		match self.liquidity_manager.next_event_async().await {
-			Event::LSPS2Client(LSPS2ClientEvent::OpeningParametersReady {
-				request_id,
-				counterparty_node_id,
-				opening_fee_params_menu,
-				min_payment_size_msat,
-				max_payment_size_msat,
-			}) => {
-				if let Some(lsps2_service) = self.lsps2_service.as_ref() {
-					if counterparty_node_id != lsps2_service.node_id {
+		match self.liquidity_manager().next_event_async().await {
+			Event::LSPS2Client(lsps2_client_event) => match self.lsps2_service.as_ref() {
+				Some(lsps2_service) => {
+					if !matches!(
+						lsps2_client_event,
+						LSPS2ClientEvent::OpeningParametersReady { counterparty_node_id, .. } |
+						LSPS2ClientEvent::InvoiceParametersReady { counterparty_node_id, .. }
+							if counterparty_node_id == lsps2_service.node_id
+					) {
 						debug_assert!(
 							false,
 							"Received response from unexpected LSP counterparty. This should never happen."
@@ -90,94 +89,89 @@ where
 						return;
 					}
 
-					if let Some(sender) =
-						lsps2_service.pending_fee_requests.lock().unwrap().remove(&request_id)
-					{
-						let response = LSPS2FeeResponse {
+					match lsps2_client_event {
+						LSPS2ClientEvent::OpeningParametersReady {
+							request_id,
 							opening_fee_params_menu,
 							min_payment_size_msat,
 							max_payment_size_msat,
-						};
+							..
+						} => {
+							if let Some(sender) = lsps2_service
+								.pending_fee_requests
+								.lock()
+								.unwrap()
+								.remove(&request_id)
+							{
+								let response = LSPS2FeeResponse {
+									opening_fee_params_menu,
+									min_payment_size_msat,
+									max_payment_size_msat,
+								};
 
-						match sender.send(response) {
-							Ok(()) => (),
-							Err(e) => {
+								match sender.send(response) {
+									Ok(()) => (),
+									Err(e) => {
+										log_error!(
+												self.logger,
+												"Failed to handle response from liquidity service: {:?}",
+												e
+												);
+									}
+								}
+							} else {
+								debug_assert!(
+									false,
+									"Received response from liquidity service for unknown request."
+								);
 								log_error!(
 									self.logger,
-									"Failed to handle response from liquidity service: {:?}",
-									e
+									"Received response from liquidity service for unknown request."
 								);
 							}
 						}
-					} else {
-						debug_assert!(
-							false,
-							"Received response from liquidity service for unknown request."
-						);
-						log_error!(
-							self.logger,
-							"Received response from liquidity service for unknown request."
-						);
-					}
-				} else {
-					log_error!(
-						self.logger,
-						"Received unexpected LSPS2Client::OpeningParametersReady event!"
-					);
-				}
-			}
-			Event::LSPS2Client(LSPS2ClientEvent::InvoiceParametersReady {
-				request_id,
-				counterparty_node_id,
-				intercept_scid,
-				cltv_expiry_delta,
-				..
-			}) => {
-				if let Some(lsps2_service) = self.lsps2_service.as_ref() {
-					if counterparty_node_id != lsps2_service.node_id {
-						debug_assert!(
-							false,
-							"Received response from unexpected LSP counterparty. This should never happen."
-						);
-						log_error!(
-							self.logger,
-							"Received response from unexpected LSP counterparty. This should never happen."
-						);
-						return;
-					}
+						LSPS2ClientEvent::InvoiceParametersReady {
+							request_id,
+							intercept_scid,
+							cltv_expiry_delta,
+							..
+						} => {
+							if let Some(sender) = lsps2_service
+								.pending_buy_requests
+								.lock()
+								.unwrap()
+								.remove(&request_id)
+							{
+								let response =
+									LSPS2BuyResponse { intercept_scid, cltv_expiry_delta };
 
-					if let Some(sender) =
-						lsps2_service.pending_buy_requests.lock().unwrap().remove(&request_id)
-					{
-						let response = LSPS2BuyResponse { intercept_scid, cltv_expiry_delta };
-
-						match sender.send(response) {
-							Ok(()) => (),
-							Err(e) => {
+								match sender.send(response) {
+									Ok(()) => (),
+									Err(e) => {
+										log_error!(
+												self.logger,
+												"Failed to handle response from liquidity service: {:?}",
+												e
+												);
+									}
+								}
+							} else {
+								debug_assert!(
+									false,
+									"Received response from liquidity service for unknown request."
+								);
 								log_error!(
 									self.logger,
-									"Failed to handle response from liquidity service: {:?}",
-									e
+									"Received response from liquidity service for unknown request."
 								);
 							}
 						}
-					} else {
-						debug_assert!(
-							false,
-							"Received response from liquidity service for unknown request."
-						);
-						log_error!(
-							self.logger,
-							"Received response from liquidity service for unknown request."
-						);
 					}
-				} else {
-					log_error!(
-						self.logger,
-						"Received unexpected LSPS2Client::InvoiceParametersReady event!"
-					);
 				}
-			}
+				None => {
+					log_error!(self.logger, "Received unexpected LSPS2Client event!");
+				}
+			},
 			e => {
 				log_error!(self.logger, "Received unexpected liquidity event: {:?}", e);
 			}
