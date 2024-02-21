@@ -630,6 +630,7 @@ impl Node {
 			Arc::clone(&self.wallet),
 			bump_tx_event_handler,
 			Arc::clone(&self.channel_manager),
+			Arc::clone(&self.connection_manager),
 			Arc::clone(&self.output_sweeper),
 			Arc::clone(&self.network_graph),
 			Arc::clone(&self.payment_store),
