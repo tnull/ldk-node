@@ -1809,6 +1809,25 @@ impl<K: KVStore + Sync + Send + 'static> Node<K> {
 	pub fn verify_signature(&self, msg: &[u8], sig: &str, pkey: &PublicKey) -> bool {
 		self.keys_manager.verify_signature(msg, sig, pkey)
 	}
+
+	/// Returns the number of nodes that support onion messages and the number of all nodes
+	pub fn network_onion_message_support(&self) -> (usize, usize) {
+		let locked_graph = self.network_graph.read_only();
+
+		let num_nodes = locked_graph.nodes().len();
+		let num_support_oms = locked_graph
+			.nodes()
+			.unordered_iter()
+			.filter(|(_, n)| {
+				n.announcement_info
+					.as_ref()
+					.map_or(false, |info| info.features.supports_onion_messages())
+			})
+			.count();
+
+		debug_assert!(num_support_oms <= num_nodes);
+		(num_support_oms, num_nodes)
+	}
 }
 
 impl<K: KVStore + Sync + Send + 'static> Drop for Node<K> {
