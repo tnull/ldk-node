@@ -1814,7 +1814,11 @@ impl<K: KVStore + Sync + Send + 'static> Node<K> {
 	pub fn network_onion_message_support(&self) -> (usize, usize) {
 		let locked_graph = self.network_graph.read_only();
 
-		let num_nodes = locked_graph.nodes().len();
+		let num_nodes = locked_graph
+			.nodes()
+			.unordered_iter()
+			.filter(|(_, n)| n.announcement_info.is_some())
+			.count();
 		let num_support_oms = locked_graph
 			.nodes()
 			.unordered_iter()
