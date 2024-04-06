@@ -99,6 +99,8 @@ mod wallet;
 pub use bip39;
 pub use bitcoin;
 pub use lightning;
+use lightning::routing::gossip::{NodeId, NodeInfo};
+use lightning::util::indexed_map::IndexedMap;
 pub use lightning_invoice;
 
 pub use balance::{BalanceDetails, LightningBalance, PendingSweepBalance};
@@ -1814,11 +1816,7 @@ impl<K: KVStore + Sync + Send + 'static> Node<K> {
 	pub fn network_onion_message_support(&self) -> (usize, usize) {
 		let locked_graph = self.network_graph.read_only();
 
-		let num_nodes = locked_graph
-			.nodes()
-			.unordered_iter()
-			.filter(|(_, n)| n.announcement_info.is_some())
-			.count();
+		let num_nodes = locked_graph.nodes().len();
 		let num_support_oms = locked_graph
 			.nodes()
 			.unordered_iter()
@@ -1831,6 +1829,12 @@ impl<K: KVStore + Sync + Send + 'static> Node<K> {
 
 		debug_assert!(num_support_oms <= num_nodes);
 		(num_support_oms, num_nodes)
+	}
+
+	/// Returns the known nodes
+	pub fn list_nodes(&self) -> IndexedMap<NodeId, NodeInfo> {
+		let locked_graph = self.network_graph.read_only();
+		locked_graph.nodes().clone()
 	}
 }
 
