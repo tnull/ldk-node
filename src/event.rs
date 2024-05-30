@@ -842,7 +842,7 @@ where
 				}
 
 				let user_channel_id: u128 = rand::thread_rng().gen::<u128>();
-				let allow_0conf = self.config.trusted_peers_0conf.contains(&counterparty_node_id);
+				let allow_0conf = channel_type.requires_zero_conf() && self.config.trusted_peers_0conf.contains(&counterparty_node_id);
 				let res = if allow_0conf {
 					self.channel_manager.accept_inbound_channel_from_trusted_peer_0conf(
 						&temporary_channel_id,
