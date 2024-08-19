@@ -146,7 +146,8 @@ use logger::{log_error, log_info, log_trace, FilesystemLogger, Logger};
 
 use lightning::chain::{BestBlock, Confirm};
 use lightning::events::bump_transaction::Wallet as LdkWallet;
-use lightning::ln::channelmanager::{ChannelShutdownState, PaymentId};
+use lightning::ln::channel_state::ChannelShutdownState;
+use lightning::ln::channelmanager::PaymentId;
 use lightning::ln::msgs::SocketAddress;
 use lightning::routing::gossip::NodeAlias;
 

@@ -9,11 +9,11 @@ use crate::logger::FilesystemLogger;
 use crate::message_handler::NodeCustomMessageHandler;
 
 use lightning::chain::chainmonitor;
-use lightning::ln::channelmanager::ChannelDetails as LdkChannelDetails;
+use lightning::ln::channel_state::ChannelDetails as LdkChannelDetails;
 use lightning::ln::msgs::RoutingMessageHandler;
 use lightning::ln::msgs::SocketAddress;
 use lightning::ln::peer_handler::IgnoringMessageHandler;
-use lightning::ln::ChannelId;
+use lightning::ln::types::ChannelId;
 use lightning::routing::gossip;
 use lightning::routing::router::DefaultRouter;
 use lightning::routing::scoring::{ProbabilisticScorer, ProbabilisticScoringFeeParameters};

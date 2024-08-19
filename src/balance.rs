@@ -8,7 +8,8 @@
 use crate::sweep::value_satoshis_from_descriptor;
 
 use lightning::chain::channelmonitor::Balance as LdkBalance;
-use lightning::ln::{ChannelId, PaymentHash, PaymentPreimage};
+use lightning::ln::types::ChannelId;
+use lightning::ln::{PaymentHash, PaymentPreimage};
 use lightning::util::sweep::{OutputSpendStatus, TrackedSpendableOutput};
 
 use bitcoin::secp256k1::PublicKey;

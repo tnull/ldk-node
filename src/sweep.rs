@@ -10,7 +10,7 @@
 //! once sufficient time has passed for us to be confident any users completed the migration.
 
 use lightning::impl_writeable_tlv_based;
-use lightning::ln::ChannelId;
+use lightning::ln::types::ChannelId;
 use lightning::sign::SpendableOutputDescriptor;
 
 use bitcoin::{BlockHash, Transaction};
