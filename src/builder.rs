@@ -808,6 +808,7 @@ fn build_with_store_internal(
 		Arc::new(message_router),
 		Arc::clone(&channel_manager),
 		IgnoringMessageHandler {},
+		IgnoringMessageHandler {},
 	));
 	let ephemeral_bytes: [u8; 32] = keys_manager.get_secure_random_bytes();
 
@@ -883,14 +884,14 @@ fn build_with_store_internal(
 			chan_handler: Arc::clone(&channel_manager),
 			route_handler: Arc::clone(&p2p_gossip_sync)
 				as Arc<dyn RoutingMessageHandler + Sync + Send>,
-			onion_message_handler: onion_messenger,
+			onion_message_handler: Arc::clone(&onion_messenger),
 			custom_message_handler,
 		},
 		GossipSync::Rapid(_) => MessageHandler {
 			chan_handler: Arc::clone(&channel_manager),
 			route_handler: Arc::new(IgnoringMessageHandler {})
 				as Arc<dyn RoutingMessageHandler + Sync + Send>,
-			onion_message_handler: onion_messenger,
+			onion_message_handler: Arc::clone(&onion_messenger),
 			custom_message_handler,
 		},
 		GossipSync::None => {
@@ -1018,6 +1019,7 @@ fn build_with_store_internal(
 		chain_monitor,
 		output_sweeper,
 		peer_manager,
+		onion_messenger,
 		connection_manager,
 		keys_manager,
 		network_graph,

@@ -138,7 +138,7 @@ use payment::{
 use peer_store::{PeerInfo, PeerStore};
 use types::{
 	Broadcaster, BumpTransactionEventHandler, ChainMonitor, ChannelManager, DynStore, FeeEstimator,
-	Graph, KeysManager, PeerManager, Router, Scorer, Sweeper, Wallet,
+	Graph, KeysManager, OnionMessenger, PeerManager, Router, Scorer, Sweeper, Wallet,
 };
 pub use types::{ChannelDetails, PeerDetails, UserChannelId};
 
@@ -187,6 +187,7 @@ pub struct Node {
 	chain_monitor: Arc<ChainMonitor>,
 	output_sweeper: Arc<Sweeper>,
 	peer_manager: Arc<PeerManager>,
+	onion_messenger: Arc<OnionMessenger>,
 	connection_manager: Arc<ConnectionManager<Arc<FilesystemLogger>>>,
 	keys_manager: Arc<KeysManager>,
 	network_graph: Arc<Graph>,
@@ -731,6 +732,7 @@ impl Node {
 		let background_chan_man = Arc::clone(&self.channel_manager);
 		let background_gossip_sync = self.gossip_source.as_gossip_sync();
 		let background_peer_man = Arc::clone(&self.peer_manager);
+		let background_onion_messenger = Arc::clone(&self.onion_messenger);
 		let background_logger = Arc::clone(&self.logger);
 		let background_error_logger = Arc::clone(&self.logger);
 		let background_scorer = Arc::clone(&self.scorer);
@@ -763,6 +765,7 @@ impl Node {
 				|e| background_event_handler.handle_event(e),
 				background_chain_mon,
 				background_chan_man,
+				Some(background_onion_messenger),
 				background_gossip_sync,
 				background_peer_man,
 				background_logger,

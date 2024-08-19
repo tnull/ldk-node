@@ -121,6 +121,7 @@ pub(crate) type OnionMessenger = lightning::onion_message::messenger::OnionMesse
 	Arc<MessageRouter>,
 	Arc<ChannelManager>,
 	IgnoringMessageHandler,
+	IgnoringMessageHandler,
 >;
 
 pub(crate) type MessageRouter = lightning::onion_message::messenger::DefaultMessageRouter<
