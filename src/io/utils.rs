@@ -14,6 +14,7 @@ use crate::sweep::DeprecatedSpendableOutputInfo;
 use crate::types::{Broadcaster, ChainSource, DynStore, FeeEstimator, KeysManager, Sweeper};
 use crate::{Error, EventQueue, PaymentDetails};
 
+use lightning::io::Cursor;
 use lightning::routing::gossip::NetworkGraph;
 use lightning::routing::scoring::{ProbabilisticScorer, ProbabilisticScoringDecayParameters};
 use lightning::util::logger::Logger;
@@ -32,7 +33,7 @@ use lightning::util::sweep::{OutputSpendStatus, OutputSweeper};
 use rand::{thread_rng, RngCore};
 
 use std::fs;
-use std::io::{Cursor, Write};
+use std::io::Write;
 use std::ops::Deref;
 use std::path::Path;
 use std::sync::Arc;

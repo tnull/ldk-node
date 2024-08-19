@@ -913,7 +913,7 @@ impl TestSyncStore {
 
 	fn do_list(
 		&self, primary_namespace: &str, secondary_namespace: &str,
-	) -> std::io::Result<Vec<String>> {
+	) -> lightning::io::Result<Vec<String>> {
 		let fs_res = self.fs_store.list(primary_namespace, secondary_namespace);
 		let sqlite_res = self.sqlite_store.list(primary_namespace, secondary_namespace);
 		let test_res = self.test_store.list(primary_namespace, secondary_namespace);
@@ -944,7 +944,7 @@ impl TestSyncStore {
 impl KVStore for TestSyncStore {
 	fn read(
 		&self, primary_namespace: &str, secondary_namespace: &str, key: &str,
-	) -> std::io::Result<Vec<u8>> {
+	) -> lightning::io::Result<Vec<u8>> {
 		let _guard = self.serializer.read().unwrap();
 
 		let fs_res = self.fs_store.read(primary_namespace, secondary_namespace, key);
@@ -969,7 +969,7 @@ impl KVStore for TestSyncStore {
 
 	fn write(
 		&self, primary_namespace: &str, secondary_namespace: &str, key: &str, buf: &[u8],
-	) -> std::io::Result<()> {
+	) -> lightning::io::Result<()> {
 		let _guard = self.serializer.write().unwrap();
 		let fs_res = self.fs_store.write(primary_namespace, secondary_namespace, key, buf);
 		let sqlite_res = self.sqlite_store.write(primary_namespace, secondary_namespace, key, buf);
@@ -996,7 +996,7 @@ impl KVStore for TestSyncStore {
 
 	fn remove(
 		&self, primary_namespace: &str, secondary_namespace: &str, key: &str, lazy: bool,
-	) -> std::io::Result<()> {
+	) -> lightning::io::Result<()> {
 		let _guard = self.serializer.write().unwrap();
 		let fs_res = self.fs_store.remove(primary_namespace, secondary_namespace, key, lazy);
 		let sqlite_res =
@@ -1024,7 +1024,7 @@ impl KVStore for TestSyncStore {
 
 	fn list(
 		&self, primary_namespace: &str, secondary_namespace: &str,
-	) -> std::io::Result<Vec<String>> {
+	) -> lightning::io::Result<Vec<String>> {
 		let _guard = self.serializer.read().unwrap();
 		self.do_list(primary_namespace, secondary_namespace)
 	}

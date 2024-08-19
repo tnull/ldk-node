@@ -499,11 +499,11 @@ where
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use bitcoin::io::Cursor;
 	use lightning::util::{
 		ser::Readable,
 		test_utils::{TestLogger, TestStore},
 	};
-	use std::io::Cursor;
 	use std::sync::Arc;
 
 	/// We refactored `PaymentDetails` to hold a payment id and moved some required fields into

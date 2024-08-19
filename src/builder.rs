@@ -29,6 +29,7 @@ use crate::wallet::Wallet;
 use crate::{LogLevel, Node};
 
 use lightning::chain::{chainmonitor, BestBlock, Watch};
+use lightning::io::Cursor;
 use lightning::ln::channelmanager::{self, ChainParameters, ChannelManagerReadArgs};
 use lightning::ln::msgs::{RoutingMessageHandler, SocketAddress};
 use lightning::ln::peer_handler::{IgnoringMessageHandler, MessageHandler};
@@ -71,7 +72,6 @@ use std::convert::TryInto;
 use std::default::Default;
 use std::fmt;
 use std::fs;
-use std::io::Cursor;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex, RwLock};
@@ -711,7 +711,7 @@ fn build_with_store_internal(
 	) {
 		Ok(monitors) => monitors,
 		Err(e) => {
-			if e.kind() == std::io::ErrorKind::NotFound {
+			if e.kind() == lightning::io::ErrorKind::NotFound {
 				Vec::new()
 			} else {
 				log_error!(logger, "Failed to read channel monitors: {}", e.to_string());
