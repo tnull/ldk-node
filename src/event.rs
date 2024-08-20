@@ -1049,7 +1049,7 @@ where
 							node.announcement_info
 								.as_ref()
 								.map_or("unnamed node".to_string(), |ann| {
-									format!("node {}", ann.alias)
+									format!("node {}", ann.alias())
 								})
 						})
 				};
