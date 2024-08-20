@@ -48,8 +48,6 @@ pub enum Error {
 	WalletOperationTimeout,
 	/// A signing operation for transaction failed.
 	OnchainTxSigningFailed,
-	/// A signing operation for message failed.
-	MessageSigningFailed,
 	/// A transaction sync operation failed.
 	TxSyncFailed,
 	/// A transaction sync operation timed out.
@@ -140,7 +138,6 @@ impl fmt::Display for Error {
 			Self::WalletOperationFailed => write!(f, "Failed to conduct wallet operation."),
 			Self::WalletOperationTimeout => write!(f, "A wallet operation timed out."),
 			Self::OnchainTxSigningFailed => write!(f, "Failed to sign given transaction."),
-			Self::MessageSigningFailed => write!(f, "Failed to sign given message."),
 			Self::TxSyncFailed => write!(f, "Failed to sync transactions."),
 			Self::TxSyncTimeout => write!(f, "Syncing transactions timed out."),
 			Self::GossipUpdateFailed => write!(f, "Failed to update gossip data."),

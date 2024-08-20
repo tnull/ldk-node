@@ -519,9 +519,8 @@ where
 		Self { inner, wallet, logger }
 	}
 
-	pub fn sign_message(&self, msg: &[u8]) -> Result<String, Error> {
+	pub fn sign_message(&self, msg: &[u8]) -> String {
 		message_signing::sign(msg, &self.inner.get_node_secret_key())
-			.or(Err(Error::MessageSigningFailed))
 	}
 
 	pub fn get_node_secret_key(&self) -> SecretKey {
