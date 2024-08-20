@@ -1488,7 +1488,7 @@ impl Node {
 	pub fn close_channel(
 		&self, user_channel_id: &UserChannelId, counterparty_node_id: PublicKey,
 	) -> Result<(), Error> {
-		self.close_channel_internal(user_channel_id, counterparty_node_id, false)
+		self.close_channel_internal(user_channel_id, counterparty_node_id, false, None)
 	}
 
 	/// Force-close a previously opened channel.
@@ -1504,13 +1504,19 @@ impl Node {
 	/// for more information).
 	pub fn force_close_channel(
 		&self, user_channel_id: &UserChannelId, counterparty_node_id: PublicKey,
+		reason: Option<String>,
 	) -> Result<(), Error> {
-		self.close_channel_internal(user_channel_id, counterparty_node_id, true)
+		self.close_channel_internal(user_channel_id, counterparty_node_id, true, reason)
 	}
 
 	fn close_channel_internal(
 		&self, user_channel_id: &UserChannelId, counterparty_node_id: PublicKey, force: bool,
+		force_close_reason: Option<String>,
 	) -> Result<(), Error> {
+		debug_assert!(
+			force_close_reason.is_none() || force,
+			"Reason can only be set for force closures"
+		);
 		let open_channels =
 			self.channel_manager.list_channels_with_counterparty(&counterparty_node_id);
 		if let Some(channel_details) =
@@ -1524,6 +1530,7 @@ impl Node {
 						.force_close_without_broadcasting_txn(
 							&channel_details.channel_id,
 							&counterparty_node_id,
+							force_close_reason.unwrap_or_default(),
 						)
 						.map_err(|e| {
 							log_error!(
@@ -1538,6 +1545,7 @@ impl Node {
 						.force_close_broadcasting_latest_txn(
 							&channel_details.channel_id,
 							&counterparty_node_id,
+							force_close_reason.unwrap_or_default(),
 						)
 						.map_err(|e| {
 							log_error!(self.logger, "Failed to force-close channel: {:?}", e);

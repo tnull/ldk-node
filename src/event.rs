@@ -453,6 +453,7 @@ where
 							.force_close_without_broadcasting_txn(
 								&temporary_channel_id,
 								&counterparty_node_id,
+								"Failed to create funding transaction".to_string(),
 							)
 							.unwrap_or_else(|e| {
 								log_error!(self.logger, "Failed to force close channel after funding generation failed: {:?}", e);
@@ -952,6 +953,7 @@ where
 								.force_close_without_broadcasting_txn(
 									&temporary_channel_id,
 									&counterparty_node_id,
+									"Channel request rejected".to_string(),
 								)
 								.unwrap_or_else(|e| {
 									log_error!(self.logger, "Failed to reject channel: {:?}", e)
@@ -968,6 +970,7 @@ where
 							.force_close_without_broadcasting_txn(
 								&temporary_channel_id,
 								&counterparty_node_id,
+								"Channel request rejected".to_string(),
 							)
 							.unwrap_or_else(|e| {
 								log_error!(self.logger, "Failed to reject channel: {:?}", e)

@@ -759,7 +759,7 @@ pub(crate) fn do_channel_full_cycle<E: ElectrumApi>(
 	println!("\nB close_channel (force: {})", force_close);
 	if force_close {
 		std::thread::sleep(Duration::from_secs(1));
-		node_a.force_close_channel(&user_channel_id, node_b.node_id()).unwrap();
+		node_a.force_close_channel(&user_channel_id, node_b.node_id(), None).unwrap();
 	} else {
 		node_a.close_channel(&user_channel_id, node_b.node_id()).unwrap();
 	}
