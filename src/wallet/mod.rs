@@ -22,6 +22,7 @@ use lightning::sign::{
 };
 
 use lightning::util::message_signing;
+use lightning_invoice::RawBolt11Invoice;
 
 use bdk::blockchain::EsploraBlockchain;
 use bdk::database::BatchDatabase;
@@ -29,7 +30,6 @@ use bdk::wallet::AddressIndex;
 use bdk::{Balance, SignOptions, SyncOptions};
 
 use bitcoin::address::{Payload, WitnessVersion};
-use bitcoin::bech32::u5;
 use bitcoin::blockdata::constants::WITNESS_SCALE_FACTOR;
 use bitcoin::blockdata::locktime::absolute::LockTime;
 use bitcoin::hash_types::WPubkeyHash;
@@ -555,9 +555,9 @@ where
 	}
 
 	fn sign_invoice(
-		&self, hrp_bytes: &[u8], invoice_data: &[u5], recipient: Recipient,
+		&self, invoice: &RawBolt11Invoice, recipient: Recipient,
 	) -> Result<RecoverableSignature, ()> {
-		self.inner.sign_invoice(hrp_bytes, invoice_data, recipient)
+		self.inner.sign_invoice(invoice, recipient)
 	}
 
 	fn sign_gossip_message(&self, msg: UnsignedGossipMessage<'_>) -> Result<Signature, ()> {
