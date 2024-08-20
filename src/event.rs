@@ -422,8 +422,8 @@ where
 					Ok(final_tx) => {
 						// Give the funding transaction back to LDK for opening the channel.
 						match self.channel_manager.funding_transaction_generated(
-							&temporary_channel_id,
-							&counterparty_node_id,
+							temporary_channel_id,
+							counterparty_node_id,
 							final_tx,
 						) {
 							Ok(()) => {},
