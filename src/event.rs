@@ -719,6 +719,7 @@ where
 				receiver_node_id: _,
 				htlcs: _,
 				sender_intended_total_msat: _,
+				onion_fields: _,
 			} => {
 				let payment_id = PaymentId(payment_hash.0);
 				log_info!(
