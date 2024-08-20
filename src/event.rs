@@ -919,8 +919,14 @@ where
 				funding_satoshis,
 				channel_type,
 				push_msat: _,
+				is_public: _,
+				params: _,
 			} => {
 				let anchor_channel = channel_type.requires_anchors_zero_fee_htlc_tx();
+
+				// TODO: We should use `is_public` flag above and reject announced channels if
+				// we're not a forwading node, once we add a 'forwarding mode' based on listening
+				// address / node alias being set.
 
 				if anchor_channel {
 					if let Some(anchor_channels_config) =
