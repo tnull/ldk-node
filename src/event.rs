@@ -192,7 +192,7 @@ impl_writeable_tlv_based_enum!(Event,
 		(2, payment_id, required),
 		(4, claimable_amount_msat, required),
 		(6, claim_deadline, option),
-	};
+	}
 );
 
 pub struct EventQueue<L: Deref>
