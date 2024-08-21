@@ -437,7 +437,8 @@ fn simple_bolt12_send_receive() {
 	std::thread::sleep(std::time::Duration::from_secs(1));
 
 	let expected_amount_msat = 100_000_000;
-	let offer = node_b.bolt12_payment().receive(expected_amount_msat, "asdf", Some(1)).unwrap();
+	let offer =
+		node_b.bolt12_payment().receive(expected_amount_msat, "asdf", None, Some(1)).unwrap();
 	let expected_quantity = Some(1);
 	let expected_payer_note = Some("Test".to_string());
 	let payment_id = node_a
@@ -491,7 +492,7 @@ fn simple_bolt12_send_receive() {
 	let offer_amount_msat = 100_000_000;
 	let less_than_offer_amount = offer_amount_msat - 10_000;
 	let expected_amount_msat = offer_amount_msat + 10_000;
-	let offer = node_b.bolt12_payment().receive(offer_amount_msat, "asdf", Some(1)).unwrap();
+	let offer = node_b.bolt12_payment().receive(offer_amount_msat, "asdf", None, Some(1)).unwrap();
 	let expected_quantity = Some(1);
 	let expected_payer_note = Some("Test".to_string());
 	assert!(node_a
