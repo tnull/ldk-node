@@ -75,7 +75,12 @@ pub enum Event {
 		/// Will only be `None` for events serialized with LDK Node v0.2.1 or prior.
 		payment_id: Option<PaymentId>,
 		/// The hash of the payment.
-		payment_hash: PaymentHash,
+		///
+		/// This will be `None` if the payment failed before receiving an invoice when paying a
+		/// BOLT12 [`Offer`].
+		///
+		/// [`Offer`]: lightning::offers::offer::Offer
+		payment_hash: Option<PaymentHash>,
 		/// The reason why the payment failed.
 		///
 		/// This will be `None` for events serialized by LDK Node v0.2.1 and prior.
@@ -160,8 +165,8 @@ impl_writeable_tlv_based_enum!(Event,
 		(3, payment_id, option),
 	},
 	(1, PaymentFailed) => {
-		(0, payment_hash, required),
-		(1, reason, option),
+		(0, payment_hash, option),
+		(1, reason, upgradable_option),
 		(3, payment_id, option),
 	},
 	(2, PaymentReceived) => {
@@ -858,13 +863,13 @@ where
 			LdkEvent::PaymentFailed { payment_id, payment_hash, reason, .. } => {
 				log_info!(
 					self.logger,
-					"Failed to send payment to payment hash {:?} due to {:?}.",
-					hex_utils::to_string(&payment_hash.0),
+					"Failed to send payment with ID {} due to {:?}.",
+					payment_id,
 					reason
 				);
 
 				let update = PaymentDetailsUpdate {
-					hash: Some(Some(payment_hash)),
+					hash: Some(payment_hash),
 					status: Some(PaymentStatus::Failed),
 					..PaymentDetailsUpdate::new(payment_id)
 				};
@@ -1188,22 +1193,6 @@ where
 			},
 			LdkEvent::DiscardFunding { .. } => {},
 			LdkEvent::HTLCIntercepted { .. } => {},
-			LdkEvent::InvoiceRequestFailed { payment_id } => {
-				log_error!(
-					self.logger,
-					"Failed to request invoice for outbound BOLT12 payment {}",
-					payment_id
-				);
-				let update = PaymentDetailsUpdate {
-					status: Some(PaymentStatus::Failed),
-					..PaymentDetailsUpdate::new(payment_id)
-				};
-				self.payment_store.update(&update).unwrap_or_else(|e| {
-					log_error!(self.logger, "Failed to access payment store: {}", e);
-					panic!("Failed to access payment store");
-				});
-				return;
-			},
 			LdkEvent::ConnectionNeeded { node_id, addresses } => {
 				let runtime_lock = self.runtime.read().unwrap();
 				debug_assert!(runtime_lock.is_some());
