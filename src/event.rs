@@ -469,6 +469,9 @@ where
 					},
 				}
 			},
+			LdkEvent::FundingTxBroadcastSafe { .. } => {
+				debug_assert!(false, "We currently only support safe funding, so this event should never be emitted.");
+			},
 			LdkEvent::PaymentClaimable {
 				payment_hash,
 				purpose,
@@ -1193,6 +1196,9 @@ where
 			},
 			LdkEvent::DiscardFunding { .. } => {},
 			LdkEvent::HTLCIntercepted { .. } => {},
+			LdkEvent::InvoiceReceived { .. } => {
+				debug_assert!(false, "We currently don't handle BOLT12 invoices manually, so this event should never be emitted.");
+			},
 			LdkEvent::ConnectionNeeded { node_id, addresses } => {
 				let runtime_lock = self.runtime.read().unwrap();
 				debug_assert!(runtime_lock.is_some());
@@ -1248,6 +1254,12 @@ where
 				}
 
 				self.bump_tx_event_handler.handle_event(&bte);
+			},
+			LdkEvent::OnionMessageIntercepted { .. } => {
+				debug_assert!(false, "We currently don't support onion message interception, so this event should never be emitted.");
+			},
+			LdkEvent::OnionMessagePeerConnected { .. } => {
+				debug_assert!(false, "We currently don't support onion message interception, so this event should never be emitted.");
 			},
 		}
 	}
