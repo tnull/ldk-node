@@ -112,7 +112,7 @@ impl Bolt12Payment {
 				let payment = PaymentDetails::new(
 					payment_id,
 					kind,
-					Some(*offer_amount_msat),
+					Some(offer_amount_msat),
 					PaymentDirection::Outbound,
 					PaymentStatus::Pending,
 				);
@@ -136,7 +136,7 @@ impl Bolt12Payment {
 						let payment = PaymentDetails::new(
 							payment_id,
 							kind,
-							Some(*offer_amount_msat),
+							Some(offer_amount_msat),
 							PaymentDirection::Outbound,
 							PaymentStatus::Failed,
 						);
@@ -172,7 +172,7 @@ impl Bolt12Payment {
 		let max_total_routing_fee_msat = None;
 
 		let offer_amount_msat = match offer.amount() {
-			Some(Amount::Bitcoin { amount_msats }) => *amount_msats,
+			Some(Amount::Bitcoin { amount_msats }) => amount_msats,
 			Some(_) => {
 				log_error!(self.logger, "Failed to send payment as the provided offer was denominated in an unsupported currency.");
 				return Err(Error::UnsupportedCurrency);
