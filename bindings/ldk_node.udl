@@ -391,12 +391,58 @@ dictionary PeerDetails {
 
 [Enum]
 interface LightningBalance {
-	ClaimableOnChannelClose ( ChannelId channel_id, PublicKey counterparty_node_id, u64 amount_satoshis );
-	ClaimableAwaitingConfirmations ( ChannelId channel_id, PublicKey counterparty_node_id, u64 amount_satoshis, u32 confirmation_height );
-	ContentiousClaimable ( ChannelId channel_id, PublicKey counterparty_node_id, u64 amount_satoshis, u32 timeout_height, PaymentHash payment_hash, PaymentPreimage payment_preimage );
-	MaybeTimeoutClaimableHTLC ( ChannelId channel_id, PublicKey counterparty_node_id, u64 amount_satoshis, u32 claimable_height, PaymentHash payment_hash);
-	MaybePreimageClaimableHTLC ( ChannelId channel_id, PublicKey counterparty_node_id, u64 amount_satoshis, u32 expiry_height, PaymentHash payment_hash);
-	CounterpartyRevokedOutputClaimable ( ChannelId channel_id, PublicKey counterparty_node_id, u64 amount_satoshis );
+	ClaimableOnChannelClose (
+		ChannelId channel_id,
+		PublicKey counterparty_node_id,
+		u64 amount_satoshis,
+		u64 transaction_fee_satoshis,
+		u64 outbound_payment_htlc_rounded_msat,
+		u64 outbound_forwarded_htlc_rounded_msat,
+		u64 inbound_claiming_htlc_rounded_msat,
+		u64 inbound_htlc_rounded_msat
+	);
+	ClaimableAwaitingConfirmations (
+		ChannelId channel_id,
+		PublicKey counterparty_node_id,
+		u64 amount_satoshis,
+		u32 confirmation_height,
+		BalanceSource source
+	);
+	ContentiousClaimable (
+		ChannelId channel_id,
+		PublicKey counterparty_node_id,
+		u64 amount_satoshis,
+		u32 timeout_height,
+		PaymentHash payment_hash,
+		PaymentPreimage payment_preimage
+	);
+	MaybeTimeoutClaimableHTLC (
+		ChannelId channel_id,
+		PublicKey counterparty_node_id,
+		u64 amount_satoshis,
+		u32 claimable_height,
+		PaymentHash payment_hash,
+		boolean outbound_payment
+	);
+	MaybePreimageClaimableHTLC (
+		ChannelId channel_id,
+		PublicKey counterparty_node_id,
+		u64 amount_satoshis,
+		u32 expiry_height,
+		PaymentHash payment_hash
+	);
+	CounterpartyRevokedOutputClaimable (
+		ChannelId channel_id,
+		PublicKey counterparty_node_id,
+		u64 amount_satoshis
+	);
+};
+
+enum BalanceSource {
+	"HolderForceClosed",
+	"CounterpartyForceClosed",
+	"CoopClose",
+	"Htlc",
 };
 
 [Enum]

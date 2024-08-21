@@ -14,6 +14,7 @@ pub use crate::graph::{ChannelInfo, ChannelUpdateInfo, NodeAnnouncementInfo, Nod
 pub use crate::payment::store::{LSPFeeLimits, PaymentDirection, PaymentKind, PaymentStatus};
 pub use crate::payment::{MaxTotalRoutingFeeLimit, QrPaymentResult, SendingParameters};
 
+pub use lightning::chain::channelmonitor::BalanceSource;
 pub use lightning::events::{ClosureReason, PaymentFailureReason};
 pub use lightning::ln::types::{ChannelId, PaymentHash, PaymentPreimage, PaymentSecret};
 pub use lightning::offers::invoice::Bolt12Invoice;
