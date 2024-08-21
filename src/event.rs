@@ -27,7 +27,7 @@ use crate::io::{
 use crate::logger::{log_debug, log_error, log_info, Logger};
 
 use lightning::events::bump_transaction::BumpTransactionEvent;
-use lightning::events::{ClosureReason, PaymentPurpose};
+use lightning::events::{ClosureReason, PaymentPurpose, ReplayEvent};
 use lightning::events::{Event as LdkEvent, PaymentFailureReason};
 use lightning::impl_writeable_tlv_based_enum;
 use lightning::ln::channelmanager::PaymentId;
@@ -400,7 +400,7 @@ where
 		}
 	}
 
-	pub async fn handle_event(&self, event: LdkEvent) {
+	pub async fn handle_event(&self, event: LdkEvent) -> Result<(), ReplayEvent> {
 		match event {
 			LdkEvent::FundingGenerationReady {
 				temporary_channel_id,
@@ -501,7 +501,7 @@ where
 							log_error!(self.logger, "Failed to access payment store: {}", e);
 							panic!("Failed to access payment store");
 						});
-						return;
+						return Ok(());
 					}
 
 					if info.status == PaymentStatus::Succeeded
@@ -523,7 +523,7 @@ where
 							log_error!(self.logger, "Failed to access payment store: {}", e);
 							panic!("Failed to access payment store");
 						});
-						return;
+						return Ok(());
 					}
 
 					let max_total_opening_fee_msat = match info.kind {
@@ -562,7 +562,7 @@ where
 							log_error!(self.logger, "Failed to access payment store: {}", e);
 							panic!("Failed to access payment store");
 						});
-						return;
+						return Ok(());
 					}
 
 					// If this is known by the store but ChannelManager doesn't know the preimage,
@@ -591,7 +591,7 @@ where
 										);
 										panic!("Failed to push to event queue");
 									});
-								return;
+								return Ok(());
 							}
 						},
 						_ => {},
@@ -821,7 +821,7 @@ where
 					id
 				} else {
 					debug_assert!(false, "payment_id should always be set.");
-					return;
+					return Ok(());
 				};
 
 				let update = PaymentDetailsUpdate {
@@ -973,7 +973,7 @@ where
 								.unwrap_or_else(|e| {
 									log_error!(self.logger, "Failed to reject channel: {:?}", e)
 								});
-							return;
+							return Ok(());
 						}
 					} else {
 						log_error!(
@@ -990,7 +990,7 @@ where
 							.unwrap_or_else(|e| {
 								log_error!(self.logger, "Failed to reject channel: {:?}", e)
 							});
-						return;
+						return Ok(());
 					}
 				}
 
@@ -1249,7 +1249,7 @@ where
 							"Ignoring BumpTransactionEvent for channel {} due to trusted counterparty {}",
 							channel_id, counterparty_node_id
 						);
-						return;
+						return Ok(());
 					}
 				}
 
@@ -1262,6 +1262,7 @@ where
 				debug_assert!(false, "We currently don't support onion message interception, so this event should never be emitted.");
 			},
 		}
+		Ok(())
 	}
 }
 
