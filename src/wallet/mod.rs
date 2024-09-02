@@ -292,7 +292,7 @@ where
 
 		self.broadcaster.broadcast_transactions(&[&tx]);
 
-		let txid = tx.txid();
+		let txid = tx.compute_txid();
 
 		if let Some(amount_sats) = amount_msat_or_drain {
 			log_info!(

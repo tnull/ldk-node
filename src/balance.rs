@@ -356,7 +356,7 @@ impl PendingSweepBalance {
 			} => {
 				let channel_id = output_info.channel_id;
 				let amount_satoshis = value_from_descriptor(&output_info.descriptor).to_sat();
-				let latest_spending_txid = latest_spending_tx.txid();
+				let latest_spending_txid = latest_spending_tx.compute_txid();
 				Self::BroadcastAwaitingConfirmation {
 					channel_id,
 					latest_broadcast_height,
@@ -372,7 +372,7 @@ impl PendingSweepBalance {
 			} => {
 				let channel_id = output_info.channel_id;
 				let amount_satoshis = value_from_descriptor(&output_info.descriptor).to_sat();
-				let latest_spending_txid = latest_spending_tx.txid();
+				let latest_spending_txid = latest_spending_tx.compute_txid();
 				Self::AwaitingThresholdConfirmations {
 					channel_id,
 					latest_spending_txid,
