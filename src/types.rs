@@ -235,7 +235,7 @@ pub struct ChannelDetails {
 	/// This is a strict superset of `is_channel_ready`.
 	pub is_usable: bool,
 	/// Returns `true` if this channel is (or will be) publicly-announced
-	pub is_public: bool,
+	pub is_announced: bool,
 	/// The difference in the CLTV value between incoming HTLCs and an outbound HTLC forwarded over
 	/// the channel.
 	pub cltv_expiry_delta: Option<u16>,
@@ -309,7 +309,7 @@ impl From<LdkChannelDetails> for ChannelDetails {
 			is_outbound: value.is_outbound,
 			is_channel_ready: value.is_channel_ready,
 			is_usable: value.is_usable,
-			is_public: value.is_public,
+			is_announced: value.is_announced,
 			cltv_expiry_delta: value.config.map(|c| c.cltv_expiry_delta),
 			counterparty_unspendable_punishment_reserve: value
 				.counterparty
