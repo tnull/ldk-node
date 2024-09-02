@@ -72,19 +72,11 @@ pub(crate) type Broadcaster = crate::tx_broadcaster::TransactionBroadcaster<Arc<
 
 pub(crate) type FeeEstimator = crate::fee_estimator::OnchainFeeEstimator<Arc<FilesystemLogger>>;
 
-pub(crate) type Wallet = crate::wallet::Wallet<
-	bdk::database::SqliteDatabase,
-	Arc<Broadcaster>,
-	Arc<FeeEstimator>,
-	Arc<FilesystemLogger>,
->;
+pub(crate) type Wallet =
+	crate::wallet::Wallet<Arc<Broadcaster>, Arc<FeeEstimator>, Arc<FilesystemLogger>>;
 
-pub(crate) type KeysManager = crate::wallet::WalletKeysManager<
-	bdk::database::SqliteDatabase,
-	Arc<Broadcaster>,
-	Arc<FeeEstimator>,
-	Arc<FilesystemLogger>,
->;
+pub(crate) type KeysManager =
+	crate::wallet::WalletKeysManager<Arc<Broadcaster>, Arc<FeeEstimator>, Arc<FilesystemLogger>>;
 
 pub(crate) type Router = DefaultRouter<
 	Arc<Graph>,

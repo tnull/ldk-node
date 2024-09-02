@@ -25,9 +25,9 @@ use lightning::util::message_signing;
 use lightning_invoice::RawBolt11Invoice;
 
 use bdk::blockchain::EsploraBlockchain;
-use bdk::database::BatchDatabase;
 use bdk::wallet::AddressIndex;
 use bdk::{Balance, SignOptions, SyncOptions};
+use bdk_wallet::Wallet as BdkWallet;
 
 use bitcoin::blockdata::constants::WITNESS_SCALE_FACTOR;
 use bitcoin::blockdata::locktime::absolute::LockTime;
@@ -48,9 +48,8 @@ enum WalletSyncStatus {
 	InProgress { subscribers: tokio::sync::broadcast::Sender<Result<(), Error>> },
 }
 
-pub(crate) struct Wallet<D, B: Deref, E: Deref, L: Deref>
+pub(crate) struct Wallet<B: Deref, E: Deref, L: Deref>
 where
-	D: BatchDatabase,
 	B::Target: BroadcasterInterface,
 	E::Target: FeeEstimator,
 	L::Target: Logger,
@@ -58,7 +57,7 @@ where
 	// A BDK blockchain used for wallet sync.
 	blockchain: EsploraBlockchain,
 	// A BDK on-chain wallet.
-	inner: Mutex<bdk::Wallet<D>>,
+	inner: Mutex<BdkWallet>,
 	// A cache storing the most recently retrieved fee rate estimations.
 	broadcaster: B,
 	fee_estimator: E,
@@ -69,15 +68,14 @@ where
 	logger: L,
 }
 
-impl<D, B: Deref, E: Deref, L: Deref> Wallet<D, B, E, L>
+impl<B: Deref, E: Deref, L: Deref> Wallet<B, E, L>
 where
-	D: BatchDatabase,
 	B::Target: BroadcasterInterface,
 	E::Target: FeeEstimator,
 	L::Target: Logger,
 {
 	pub(crate) fn new(
-		blockchain: EsploraBlockchain, wallet: bdk::Wallet<D>, broadcaster: B, fee_estimator: E,
+		blockchain: EsploraBlockchain, wallet: BdkWallet, broadcaster: B, fee_estimator: E,
 		logger: L,
 	) -> Self {
 		let start_balance = wallet.get_balance().unwrap_or(Balance {
@@ -366,9 +364,8 @@ where
 	}
 }
 
-impl<D, B: Deref, E: Deref, L: Deref> WalletSource for Wallet<D, B, E, L>
+impl<B: Deref, E: Deref, L: Deref> WalletSource for Wallet<B, E, L>
 where
-	D: BatchDatabase,
 	B::Target: BroadcasterInterface,
 	E::Target: FeeEstimator,
 	L::Target: Logger,
@@ -488,21 +485,19 @@ where
 
 /// Similar to [`KeysManager`], but overrides the destination and shutdown scripts so they are
 /// directly spendable by the BDK wallet.
-pub(crate) struct WalletKeysManager<D, B: Deref, E: Deref, L: Deref>
+pub(crate) struct WalletKeysManager<B: Deref, E: Deref, L: Deref>
 where
-	D: BatchDatabase,
 	B::Target: BroadcasterInterface,
 	E::Target: FeeEstimator,
 	L::Target: Logger,
 {
 	inner: KeysManager,
-	wallet: Arc<Wallet<D, B, E, L>>,
+	wallet: Arc<Wallet<B, E, L>>,
 	logger: L,
 }
 
-impl<D, B: Deref, E: Deref, L: Deref> WalletKeysManager<D, B, E, L>
+impl<B: Deref, E: Deref, L: Deref> WalletKeysManager<B, E, L>
 where
-	D: BatchDatabase,
 	B::Target: BroadcasterInterface,
 	E::Target: FeeEstimator,
 	L::Target: Logger,
@@ -513,7 +508,7 @@ where
 	/// `starting_time_nanos`.
 	pub fn new(
 		seed: &[u8; 32], starting_time_secs: u64, starting_time_nanos: u32,
-		wallet: Arc<Wallet<D, B, E, L>>, logger: L,
+		wallet: Arc<Wallet<B, E, L>>, logger: L,
 	) -> Self {
 		let inner = KeysManager::new(seed, starting_time_secs, starting_time_nanos);
 		Self { inner, wallet, logger }
@@ -532,9 +527,8 @@ where
 	}
 }
 
-impl<D, B: Deref, E: Deref, L: Deref> NodeSigner for WalletKeysManager<D, B, E, L>
+impl<B: Deref, E: Deref, L: Deref> NodeSigner for WalletKeysManager<B, E, L>
 where
-	D: BatchDatabase,
 	B::Target: BroadcasterInterface,
 	E::Target: FeeEstimator,
 	L::Target: Logger,
@@ -576,9 +570,8 @@ where
 	}
 }
 
-impl<D, B: Deref, E: Deref, L: Deref> OutputSpender for WalletKeysManager<D, B, E, L>
+impl<B: Deref, E: Deref, L: Deref> OutputSpender for WalletKeysManager<B, E, L>
 where
-	D: BatchDatabase,
 	B::Target: BroadcasterInterface,
 	E::Target: FeeEstimator,
 	L::Target: Logger,
@@ -600,9 +593,8 @@ where
 	}
 }
 
-impl<D, B: Deref, E: Deref, L: Deref> EntropySource for WalletKeysManager<D, B, E, L>
+impl<B: Deref, E: Deref, L: Deref> EntropySource for WalletKeysManager<B, E, L>
 where
-	D: BatchDatabase,
 	B::Target: BroadcasterInterface,
 	E::Target: FeeEstimator,
 	L::Target: Logger,
@@ -612,9 +604,8 @@ where
 	}
 }
 
-impl<D, B: Deref, E: Deref, L: Deref> SignerProvider for WalletKeysManager<D, B, E, L>
+impl<B: Deref, E: Deref, L: Deref> SignerProvider for WalletKeysManager<B, E, L>
 where
-	D: BatchDatabase,
 	B::Target: BroadcasterInterface,
 	E::Target: FeeEstimator,
 	L::Target: Logger,
@@ -664,9 +655,8 @@ where
 	}
 }
 
-impl<D, B: Deref, E: Deref, L: Deref> ChangeDestinationSource for WalletKeysManager<D, B, E, L>
+impl<B: Deref, E: Deref, L: Deref> ChangeDestinationSource for WalletKeysManager<B, E, L>
 where
-	D: BatchDatabase,
 	B::Target: BroadcasterInterface,
 	E::Target: FeeEstimator,
 	L::Target: Logger,
