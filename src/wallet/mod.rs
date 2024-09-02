@@ -26,8 +26,8 @@ use lightning_invoice::RawBolt11Invoice;
 
 use bdk::blockchain::EsploraBlockchain;
 use bdk::wallet::AddressIndex;
-use bdk::{SignOptions, SyncOptions};
 use bdk_chain::ChainPosition;
+use bdk_wallet::SignOptions;
 use bdk_wallet::Wallet as BdkWallet;
 
 use bitcoin::blockdata::constants::WITNESS_SCALE_FACTOR;
@@ -142,7 +142,7 @@ where
 	) -> Result<Transaction, Error> {
 		let fee_rate = self.fee_estimator.estimate_fee_rate(confirmation_target);
 
-		let locked_wallet = self.inner.lock().unwrap();
+		let mut locked_wallet = self.inner.lock().unwrap();
 		let mut tx_builder = locked_wallet.build_tx();
 
 		tx_builder
@@ -152,7 +152,7 @@ where
 			.enable_rbf();
 
 		let mut psbt = match tx_builder.finish() {
-			Ok((psbt, _)) => {
+			Ok(psbt) => {
 				log_trace!(self.logger, "Created funding PSBT: {:?}", psbt);
 				psbt
 			},
@@ -174,7 +174,12 @@ where
 			},
 		}
 
-		Ok(psbt.extract_tx())
+		let tx = psbt.extract_tx().map_err(|e| {
+			log_error!(self.logger, "Failed to extract transaction: {}", e);
+			e
+		})?;
+
+		Ok(tx)
 	}
 
 	pub(crate) fn get_new_address(&self) -> Result<bitcoin::Address, Error> {
@@ -218,7 +223,7 @@ where
 		let fee_rate = self.fee_estimator.estimate_fee_rate(confirmation_target);
 
 		let tx = {
-			let locked_wallet = self.inner.lock().unwrap();
+			let mut locked_wallet = self.inner.lock().unwrap();
 			let mut tx_builder = locked_wallet.build_tx();
 
 			if let Some(amount_sats) = amount_msat_or_drain {
@@ -235,7 +240,7 @@ where
 			}
 
 			let mut psbt = match tx_builder.finish() {
-				Ok((psbt, _)) => {
+				Ok(psbt) => {
 					log_trace!(self.logger, "Created PSBT: {:?}", psbt);
 					psbt
 				},
@@ -256,7 +261,11 @@ where
 					return Err(err.into());
 				},
 			}
-			psbt.extract_tx()
+
+			psbt.extract_tx().map_err(|e| {
+				log_error!(self.logger, "Failed to extract transaction: {}", e);
+				e
+			})?
 		};
 
 		self.broadcaster.broadcast_transactions(&[&tx]);
@@ -440,7 +449,12 @@ where
 			},
 		}
 
-		Ok(psbt.extract_tx())
+		let tx = psbt.extract_tx().map_err(|e| {
+			log_error!(self.logger, "Failed to extract transaction: {}", e);
+			()
+		})?;
+
+		Ok(tx)
 	}
 }
 
