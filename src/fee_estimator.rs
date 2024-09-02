@@ -90,7 +90,8 @@ where
 		let confirmation_targets = vec![
 			ConfirmationTarget::OnchainPayment,
 			ConfirmationTarget::ChannelFunding,
-			LdkConfirmationTarget::OnChainSweep.into(),
+			LdkConfirmationTarget::MaximumFeeEstimate.into(),
+			LdkConfirmationTarget::UrgentOnChainSweep.into(),
 			LdkConfirmationTarget::MinAllowedAnchorChannelRemoteFee.into(),
 			LdkConfirmationTarget::MinAllowedNonAnchorChannelRemoteFee.into(),
 			LdkConfirmationTarget::AnchorChannelFee.into(),
@@ -104,7 +105,8 @@ where
 				ConfirmationTarget::OnchainPayment => 6,
 				ConfirmationTarget::ChannelFunding => 12,
 				ConfirmationTarget::Lightning(ldk_target) => match ldk_target {
-					LdkConfirmationTarget::OnChainSweep => 6,
+					LdkConfirmationTarget::MaximumFeeEstimate => 1,
+					LdkConfirmationTarget::UrgentOnChainSweep => 6,
 					LdkConfirmationTarget::MinAllowedAnchorChannelRemoteFee => 1008,
 					LdkConfirmationTarget::MinAllowedNonAnchorChannelRemoteFee => 144,
 					LdkConfirmationTarget::AnchorChannelFee => 1008,
@@ -164,7 +166,8 @@ where
 			ConfirmationTarget::OnchainPayment => 5000,
 			ConfirmationTarget::ChannelFunding => 1000,
 			ConfirmationTarget::Lightning(ldk_target) => match ldk_target {
-				LdkConfirmationTarget::OnChainSweep => 5000,
+				LdkConfirmationTarget::MaximumFeeEstimate => 8000,
+				LdkConfirmationTarget::UrgentOnChainSweep => 5000,
 				LdkConfirmationTarget::MinAllowedAnchorChannelRemoteFee => {
 					FEERATE_FLOOR_SATS_PER_KW
 				},
