@@ -29,17 +29,15 @@ use bdk::database::BatchDatabase;
 use bdk::wallet::AddressIndex;
 use bdk::{Balance, SignOptions, SyncOptions};
 
-use bitcoin::address::{Payload, WitnessVersion};
 use bitcoin::blockdata::constants::WITNESS_SCALE_FACTOR;
 use bitcoin::blockdata::locktime::absolute::LockTime;
-use bitcoin::hash_types::WPubkeyHash;
 use bitcoin::hashes::Hash;
 use bitcoin::key::XOnlyPublicKey;
 use bitcoin::psbt::PartiallySignedTransaction;
 use bitcoin::secp256k1::ecdh::SharedSecret;
 use bitcoin::secp256k1::ecdsa::{RecoverableSignature, Signature};
 use bitcoin::secp256k1::{PublicKey, Scalar, Secp256k1, SecretKey, Signing};
-use bitcoin::{ScriptBuf, Transaction, TxOut, Txid};
+use bitcoin::{ScriptBuf, Transaction, TxOut, Txid, WPubkeyHash, WitnessProgram, WitnessVersion};
 
 use std::ops::{Deref, DerefMut};
 use std::sync::{Arc, Mutex, RwLock};
@@ -399,46 +397,58 @@ where
 			.filter(|u| confirmed_txs.iter().find(|t| t.txid == u.outpoint.txid).is_some());
 
 		for u in unspent_confirmed_utxos {
-			let payload = Payload::from_script(&u.txout.script_pubkey).map_err(|e| {
-				log_error!(self.logger, "Failed to retrieve script payload: {}", e);
-			})?;
-
-			match payload {
-				Payload::WitnessProgram(program) => match program.version() {
-					WitnessVersion::V0 if program.program().len() == 20 => {
-						let wpkh =
-							WPubkeyHash::from_slice(program.program().as_bytes()).map_err(|e| {
-								log_error!(self.logger, "Failed to retrieve script payload: {}", e);
-							})?;
-						let utxo = Utxo::new_v0_p2wpkh(u.outpoint, u.txout.value, &wpkh);
-						utxos.push(utxo);
-					},
-					WitnessVersion::V1 => {
-						XOnlyPublicKey::from_slice(program.program().as_bytes()).map_err(|e| {
+			let script_pubkey = u.txout.script_pubkey;
+			match script_pubkey.witness_version() {
+				Some(version @ WitnessVersion::V0) => {
+					let witness_program = WitnessProgram::new(version, script_pubkey.as_bytes())
+						.map_err(|e| {
 							log_error!(self.logger, "Failed to retrieve script payload: {}", e);
 						})?;
 
-						let utxo = Utxo {
-							outpoint: u.outpoint,
-							output: TxOut {
-								value: u.txout.value,
-								script_pubkey: ScriptBuf::new_witness_program(&program),
-							},
-							satisfaction_weight: 1 /* empty script_sig */ * WITNESS_SCALE_FACTOR as u64 +
-								1 /* witness items */ + 1 /* schnorr sig len */ + 64, /* schnorr sig */
-						};
-						utxos.push(utxo);
-					},
-					_ => {
+					let program_length = witness_program.program().len();
+					if program_length != 20 {
 						log_error!(
 							self.logger,
-							"Unexpected witness version or length. Version: {}, Length: {}",
-							program.version(),
-							program.program().len()
+							"Unexpected witness program length: {}",
+							program_length
 						);
-					},
+						continue;
+					}
+
+					let wpkh = WPubkeyHash::from_slice(&witness_program.program().as_bytes())
+						.map_err(|e| {
+							log_error!(self.logger, "Failed to retrieve script payload: {}", e);
+						})?;
+					let utxo = Utxo::new_v0_p2wpkh(u.outpoint, u.txout.value, &wpkh);
+					utxos.push(utxo);
 				},
-				_ => {
+				Some(version @ WitnessVersion::V1) => {
+					let witness_program = WitnessProgram::new(version, script_pubkey.as_bytes())
+						.map_err(|e| {
+							log_error!(self.logger, "Failed to retrieve script payload: {}", e);
+						})?;
+
+					XOnlyPublicKey::from_slice(&witness_program.program().as_bytes()).map_err(
+						|e| {
+							log_error!(self.logger, "Failed to retrieve script payload: {}", e);
+						},
+					)?;
+
+					let utxo = Utxo {
+						outpoint: u.outpoint,
+						output: TxOut {
+							value: u.txout.value,
+							script_pubkey: ScriptBuf::new_witness_program(&witness_program),
+						},
+						satisfaction_weight: 1 /* empty script_sig */ * WITNESS_SCALE_FACTOR as u64 +
+							1 /* witness items */ + 1 /* schnorr sig len */ + 64, /* schnorr sig */
+					};
+					utxos.push(utxo);
+				},
+				Some(version) => {
+					log_error!(self.logger, "Unexpected witness version: {}", version,);
+				},
+				None => {
 					log_error!(
 						self.logger,
 						"Tried to use a non-witness script. This must never happen."
@@ -649,11 +659,10 @@ where
 			log_error!(self.logger, "Failed to retrieve new address from wallet: {}", e);
 		})?;
 
-		match address.payload {
-			Payload::WitnessProgram(program) => ShutdownScript::new_witness_program(&program)
-				.map_err(|e| {
-					log_error!(self.logger, "Invalid shutdown script: {:?}", e);
-				}),
+		match address.witness_program() {
+			Some(program) => ShutdownScript::new_witness_program(&program).map_err(|e| {
+				log_error!(self.logger, "Invalid shutdown script: {:?}", e);
+			}),
 			_ => {
 				log_error!(
 					self.logger,
