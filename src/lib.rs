@@ -1192,7 +1192,7 @@ impl Node {
 	fn open_channel_inner(
 		&self, node_id: PublicKey, address: SocketAddress, channel_amount_sats: u64,
 		push_to_counterparty_msat: Option<u64>, channel_config: Option<ChannelConfig>,
-		announce_channel: bool,
+		announce_for_forwarding: bool,
 	) -> Result<UserChannelId, Error> {
 		let rt_lock = self.runtime.read().unwrap();
 		if rt_lock.is_none() {
@@ -1254,12 +1254,12 @@ impl Node {
 		}
 
 		let mut user_config = default_user_config(&self.config);
-		user_config.channel_handshake_config.announced_channel = announce_channel;
+		user_config.channel_handshake_config.announce_for_forwarding = announce_for_forwarding;
 		user_config.channel_config = (channel_config.unwrap_or_default()).clone().into();
 		// We set the max inflight to 100% for private channels.
 		// FIXME: LDK will default to this behavior soon, too, at which point we should drop this
 		// manual override.
-		if !announce_channel {
+		if !announce_for_forwarding {
 			user_config
 				.channel_handshake_config
 				.max_inbound_htlc_value_in_flight_percent_of_channel = 100;

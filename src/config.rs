@@ -297,7 +297,7 @@ pub(crate) fn default_user_config(config: &Config) -> UserConfig {
 
 	if !may_announce_channel(config) {
 		user_config.accept_forwards_to_priv_channels = false;
-		user_config.channel_handshake_config.announced_channel = false;
+		user_config.channel_handshake_config.announce_for_forwarding = false;
 		user_config.channel_handshake_limits.force_announced_channel_preference = true;
 	}
 
