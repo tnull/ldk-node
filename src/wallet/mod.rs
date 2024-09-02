@@ -26,7 +26,7 @@ use lightning_invoice::RawBolt11Invoice;
 
 use bdk::blockchain::EsploraBlockchain;
 use bdk::wallet::AddressIndex;
-use bdk::{Balance, SignOptions, SyncOptions};
+use bdk::{SignOptions, SyncOptions};
 use bdk_chain::ChainPosition;
 use bdk_wallet::Wallet as BdkWallet;
 
@@ -41,7 +41,7 @@ use bitcoin::secp256k1::{PublicKey, Scalar, Secp256k1, SecretKey, Signing};
 use bitcoin::{ScriptBuf, Transaction, TxOut, Txid, WPubkeyHash, WitnessProgram, WitnessVersion};
 
 use std::ops::{Deref, DerefMut};
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 enum WalletSyncStatus {
@@ -64,8 +64,6 @@ where
 	fee_estimator: E,
 	// A Mutex holding the current sync status.
 	sync_status: Mutex<WalletSyncStatus>,
-	// TODO: Drop this workaround after BDK 1.0 upgrade.
-	balance_cache: RwLock<Balance>,
 	logger: L,
 }
 
@@ -79,17 +77,9 @@ where
 		blockchain: EsploraBlockchain, wallet: BdkWallet, broadcaster: B, fee_estimator: E,
 		logger: L,
 	) -> Self {
-		let start_balance = wallet.get_balance().unwrap_or(Balance {
-			immature: 0,
-			trusted_pending: 0,
-			untrusted_pending: 0,
-			confirmed: 0,
-		});
-
 		let inner = Mutex::new(wallet);
 		let sync_status = Mutex::new(WalletSyncStatus::Completed);
-		let balance_cache = RwLock::new(start_balance);
-		Self { blockchain, inner, broadcaster, fee_estimator, sync_status, balance_cache, logger }
+		Self { blockchain, inner, broadcaster, fee_estimator, sync_status, logger }
 	}
 
 	pub(crate) async fn sync(&self) -> Result<(), Error> {
@@ -112,14 +102,7 @@ where
 
 			match wallet_sync_timeout_fut.await {
 				Ok(res) => match res {
-					Ok(()) => {
-						// TODO: Drop this workaround after BDK 1.0 upgrade.
-						// Update balance cache after syncing.
-						if let Ok(balance) = wallet_lock.get_balance() {
-							*self.balance_cache.write().unwrap() = balance;
-						}
-						Ok(())
-					},
+					Ok(()) => Ok(()),
 					Err(e) => match e {
 						bdk::Error::Esplora(ref be) => match **be {
 							bdk::blockchain::esplora::EsploraError::Reqwest(_) => {
@@ -208,22 +191,11 @@ where
 	pub(crate) fn get_balances(
 		&self, total_anchor_channels_reserve_sats: u64,
 	) -> Result<(u64, u64), Error> {
-		// TODO: Drop this workaround after BDK 1.0 upgrade.
-		// We get the balance and update our cache if we can do so without blocking on the wallet
-		// Mutex. Otherwise, we return a cached value.
-		let balance = match self.inner.try_lock() {
-			Ok(wallet_lock) => {
-				// Update balance cache if we can.
-				let balance = wallet_lock.get_balance()?;
-				*self.balance_cache.write().unwrap() = balance.clone();
-				balance
-			},
-			Err(_) => self.balance_cache.read().unwrap().clone(),
-		};
+		let balance = self.inner.lock().unwrap().balance();
 
 		let (total, spendable) = (
-			balance.get_total(),
-			balance.get_spendable().saturating_sub(total_anchor_channels_reserve_sats),
+			balance.total().to_sat(),
+			balance.trusted_spendable().to_sat().saturating_sub(total_anchor_channels_reserve_sats),
 		);
 
 		Ok((total, spendable))
