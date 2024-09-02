@@ -5,6 +5,10 @@
 // http://opensource.org/licenses/MIT>, at your option. You may not use this file except in
 // accordance with one or both of these licenses.
 
+use bdk_chain::bitcoin::psbt::ExtractTxError as BdkExtractTxError;
+use bdk_wallet::error::CreateTxError as BdkCreateTxError;
+use bdk_wallet::signer::SignerError as BdkSignerError;
+
 use std::fmt;
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -184,12 +188,21 @@ impl fmt::Display for Error {
 
 impl std::error::Error for Error {}
 
-impl From<bdk::Error> for Error {
-	fn from(e: bdk::Error) -> Self {
-		match e {
-			bdk::Error::Signer(_) => Self::OnchainTxSigningFailed,
-			_ => Self::WalletOperationFailed,
-		}
+impl From<BdkSignerError> for Error {
+	fn from(_: BdkSignerError) -> Self {
+		Self::OnchainTxSigningFailed
+	}
+}
+
+impl From<BdkCreateTxError> for Error {
+	fn from(_: BdkCreateTxError) -> Self {
+		Self::OnchainTxCreationFailed
+	}
+}
+
+impl From<BdkExtractTxError> for Error {
+	fn from(_: BdkExtractTxError) -> Self {
+		Self::OnchainTxCreationFailed
 	}
 }
 
