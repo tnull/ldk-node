@@ -27,6 +27,7 @@ use lightning_invoice::RawBolt11Invoice;
 use bdk::blockchain::EsploraBlockchain;
 use bdk::wallet::AddressIndex;
 use bdk::{Balance, SignOptions, SyncOptions};
+use bdk_chain::ChainPosition;
 use bdk_wallet::Wallet as BdkWallet;
 
 use bitcoin::blockdata::constants::WITNESS_SCALE_FACTOR;
@@ -373,25 +374,13 @@ where
 	fn list_confirmed_utxos(&self) -> Result<Vec<Utxo>, ()> {
 		let locked_wallet = self.inner.lock().unwrap();
 		let mut utxos = Vec::new();
-		let confirmed_txs: Vec<bdk::TransactionDetails> = locked_wallet
-			.list_transactions(false)
-			.map_err(|e| {
-				log_error!(self.logger, "Failed to retrieve transactions from wallet: {}", e);
-			})?
-			.into_iter()
-			.filter(|t| t.confirmation_time.is_some())
+		let confirmed_txs: Vec<Txid> = locked_wallet
+			.transactions()
+			.filter(|t| matches!(t.chain_position, ChainPosition::Confirmed(_)))
+			.map(|t| t.tx_node.txid)
 			.collect();
-		let unspent_confirmed_utxos = locked_wallet
-			.list_unspent()
-			.map_err(|e| {
-				log_error!(
-					self.logger,
-					"Failed to retrieve unspent transactions from wallet: {}",
-					e
-				);
-			})?
-			.into_iter()
-			.filter(|u| confirmed_txs.iter().find(|t| t.txid == u.outpoint.txid).is_some());
+		let unspent_confirmed_utxos =
+			locked_wallet.list_unspent().filter(|u| confirmed_txs.contains(&u.outpoint.txid));
 
 		for u in unspent_confirmed_utxos {
 			let script_pubkey = u.txout.script_pubkey;
