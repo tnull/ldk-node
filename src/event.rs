@@ -41,7 +41,7 @@ use lightning_liquidity::lsps2::utils::compute_opening_fee;
 
 use bitcoin::blockdata::locktime::absolute::LockTime;
 use bitcoin::secp256k1::PublicKey;
-use bitcoin::OutPoint;
+use bitcoin::{Amount, OutPoint};
 
 use rand::{thread_rng, Rng};
 
@@ -418,9 +418,10 @@ where
 				let locktime = LockTime::from_height(cur_height).unwrap_or(LockTime::ZERO);
 
 				// Sign the final funding transaction and broadcast it.
+				let channel_amount = Amount::from_sat(channel_value_satoshis);
 				match self.wallet.create_funding_transaction(
 					output_script,
-					channel_value_satoshis,
+					channel_amount,
 					confirmation_target,
 					locktime,
 				) {

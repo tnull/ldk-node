@@ -38,7 +38,9 @@ use bitcoin::psbt::Psbt;
 use bitcoin::secp256k1::ecdh::SharedSecret;
 use bitcoin::secp256k1::ecdsa::{RecoverableSignature, Signature};
 use bitcoin::secp256k1::{PublicKey, Scalar, Secp256k1, SecretKey, Signing};
-use bitcoin::{ScriptBuf, Transaction, TxOut, Txid, WPubkeyHash, WitnessProgram, WitnessVersion};
+use bitcoin::{
+	Amount, ScriptBuf, Transaction, TxOut, Txid, WPubkeyHash, WitnessProgram, WitnessVersion,
+};
 
 use std::ops::{Deref, DerefMut};
 use std::sync::{Arc, Mutex};
@@ -137,7 +139,7 @@ where
 	}
 
 	pub(crate) fn create_funding_transaction(
-		&self, output_script: ScriptBuf, value_sats: u64, confirmation_target: ConfirmationTarget,
+		&self, output_script: ScriptBuf, amount: Amount, confirmation_target: ConfirmationTarget,
 		locktime: LockTime,
 	) -> Result<Transaction, Error> {
 		let fee_rate = self.fee_estimator.estimate_fee_rate(confirmation_target);
@@ -146,7 +148,7 @@ where
 		let mut tx_builder = locked_wallet.build_tx();
 
 		tx_builder
-			.add_recipient(output_script, value_sats)
+			.add_recipient(output_script, amount)
 			.fee_rate(fee_rate)
 			.nlocktime(locktime)
 			.enable_rbf();
@@ -217,7 +219,7 @@ where
 	/// If `amount_msat_or_drain` is `None` the wallet will be drained, i.e., all available funds will be
 	/// spent.
 	pub(crate) fn send_to_address(
-		&self, address: &bitcoin::Address, amount_msat_or_drain: Option<u64>,
+		&self, address: &bitcoin::Address, amount_or_drain: Option<Amount>,
 	) -> Result<Txid, Error> {
 		let confirmation_target = ConfirmationTarget::OnchainPayment;
 		let fee_rate = self.fee_estimator.estimate_fee_rate(confirmation_target);
@@ -226,9 +228,9 @@ where
 			let mut locked_wallet = self.inner.lock().unwrap();
 			let mut tx_builder = locked_wallet.build_tx();
 
-			if let Some(amount_sats) = amount_msat_or_drain {
+			if let Some(amount) = amount_or_drain {
 				tx_builder
-					.add_recipient(address.script_pubkey(), amount_sats)
+					.add_recipient(address.script_pubkey(), amount)
 					.fee_rate(fee_rate)
 					.enable_rbf();
 			} else {
@@ -272,12 +274,12 @@ where
 
 		let txid = tx.compute_txid();
 
-		if let Some(amount_sats) = amount_msat_or_drain {
+		if let Some(amount) = amount_or_drain {
 			log_info!(
 				self.logger,
 				"Created new transaction {} sending {}sats on-chain to address {}",
 				txid,
-				amount_sats,
+				amount.to_sat(),
 				address
 			);
 		} else {
