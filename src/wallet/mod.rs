@@ -33,7 +33,7 @@ use bitcoin::blockdata::constants::WITNESS_SCALE_FACTOR;
 use bitcoin::blockdata::locktime::absolute::LockTime;
 use bitcoin::hashes::Hash;
 use bitcoin::key::XOnlyPublicKey;
-use bitcoin::psbt::PartiallySignedTransaction;
+use bitcoin::psbt::Psbt;
 use bitcoin::secp256k1::ecdh::SharedSecret;
 use bitcoin::secp256k1::ecdsa::{RecoverableSignature, Signature};
 use bitcoin::secp256k1::{PublicKey, Scalar, Secp256k1, SecretKey, Signing};
@@ -461,7 +461,7 @@ where
 		Ok(address_info.address.script_pubkey())
 	}
 
-	fn sign_psbt(&self, mut psbt: PartiallySignedTransaction) -> Result<Transaction, ()> {
+	fn sign_psbt(&self, mut psbt: Psbt) -> Result<Transaction, ()> {
 		let locked_wallet = self.inner.lock().unwrap();
 
 		// While BDK populates both `witness_utxo` and `non_witness_utxo` fields, LDK does not. As
