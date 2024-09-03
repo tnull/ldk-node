@@ -25,9 +25,8 @@ use lightning::util::message_signing;
 use lightning_invoice::RawBolt11Invoice;
 
 use bdk::blockchain::EsploraBlockchain;
-use bdk::wallet::AddressIndex;
 use bdk_chain::ChainPosition;
-use bdk_wallet::SignOptions;
+use bdk_wallet::{KeychainKind, SignOptions};
 use bdk_wallet::Wallet as BdkWallet;
 
 use bitcoin::blockdata::constants::WITNESS_SCALE_FACTOR;
@@ -185,13 +184,12 @@ where
 	}
 
 	pub(crate) fn get_new_address(&self) -> Result<bitcoin::Address, Error> {
-		let address_info = self.inner.lock().unwrap().get_address(AddressIndex::New)?;
+		let address_info = self.inner.lock().unwrap().reveal_next_address(KeychainKind::External);
 		Ok(address_info.address)
 	}
 
 	fn get_new_internal_address(&self) -> Result<bitcoin::Address, Error> {
-		let address_info =
-			self.inner.lock().unwrap().get_internal_address(AddressIndex::LastUnused)?;
+		let address_info = self.inner.lock().unwrap().next_unused_address(KeychainKind::Internal);
 		Ok(address_info.address)
 	}
 
@@ -421,12 +419,8 @@ where
 	}
 
 	fn get_change_script(&self) -> Result<ScriptBuf, ()> {
-		let locked_wallet = self.inner.lock().unwrap();
-		let address_info =
-			locked_wallet.get_internal_address(AddressIndex::LastUnused).map_err(|e| {
-				log_error!(self.logger, "Failed to retrieve new address from wallet: {}", e);
-			})?;
-
+		let mut locked_wallet = self.inner.lock().unwrap();
+		let address_info = locked_wallet.next_unused_address(KeychainKind::Internal);
 		Ok(address_info.address.script_pubkey())
 	}
 
