@@ -45,6 +45,8 @@ use std::ops::{Deref, DerefMut};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+pub(crate) mod ser;
+
 enum WalletSyncStatus {
 	Completed,
 	InProgress { subscribers: tokio::sync::broadcast::Sender<Result<(), Error>> },
