@@ -13,7 +13,7 @@ use lightning::impl_writeable_tlv_based;
 use lightning::ln::types::ChannelId;
 use lightning::sign::SpendableOutputDescriptor;
 
-use bitcoin::{BlockHash, Transaction};
+use bitcoin::{Amount, BlockHash, Transaction};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct DeprecatedSpendableOutputInfo {
@@ -38,7 +38,7 @@ impl_writeable_tlv_based!(DeprecatedSpendableOutputInfo, {
 	(14, confirmation_hash, option),
 });
 
-pub(crate) fn value_satoshis_from_descriptor(descriptor: &SpendableOutputDescriptor) -> u64 {
+pub(crate) fn value_from_descriptor(descriptor: &SpendableOutputDescriptor) -> Amount {
 	match &descriptor {
 		SpendableOutputDescriptor::StaticOutput { output, .. } => output.value,
 		SpendableOutputDescriptor::DelayedPaymentOutput(output) => output.output.value,

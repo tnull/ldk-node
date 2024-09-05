@@ -5,7 +5,7 @@
 // http://opensource.org/licenses/MIT>, at your option. You may not use this file except in
 // accordance with one or both of these licenses.
 
-use crate::sweep::value_satoshis_from_descriptor;
+use crate::sweep::value_from_descriptor;
 
 use lightning::chain::channelmonitor::Balance as LdkBalance;
 use lightning::chain::channelmonitor::BalanceSource;
@@ -346,7 +346,7 @@ impl PendingSweepBalance {
 		match output_info.status {
 			OutputSpendStatus::PendingInitialBroadcast { .. } => {
 				let channel_id = output_info.channel_id;
-				let amount_satoshis = value_satoshis_from_descriptor(&output_info.descriptor);
+				let amount_satoshis = value_from_descriptor(&output_info.descriptor).to_sat();
 				Self::PendingBroadcast { channel_id, amount_satoshis }
 			},
 			OutputSpendStatus::PendingFirstConfirmation {
@@ -355,7 +355,7 @@ impl PendingSweepBalance {
 				..
 			} => {
 				let channel_id = output_info.channel_id;
-				let amount_satoshis = value_satoshis_from_descriptor(&output_info.descriptor);
+				let amount_satoshis = value_from_descriptor(&output_info.descriptor).to_sat();
 				let latest_spending_txid = latest_spending_tx.txid();
 				Self::BroadcastAwaitingConfirmation {
 					channel_id,
@@ -371,7 +371,7 @@ impl PendingSweepBalance {
 				..
 			} => {
 				let channel_id = output_info.channel_id;
-				let amount_satoshis = value_satoshis_from_descriptor(&output_info.descriptor);
+				let amount_satoshis = value_from_descriptor(&output_info.descriptor).to_sat();
 				let latest_spending_txid = latest_spending_tx.txid();
 				Self::AwaitingThresholdConfirmations {
 					channel_id,
