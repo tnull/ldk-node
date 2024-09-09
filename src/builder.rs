@@ -15,6 +15,8 @@ use crate::fee_estimator::OnchainFeeEstimator;
 use crate::gossip::GossipSource;
 use crate::io;
 use crate::io::sqlite_store::SqliteStore;
+#[cfg(any(vss, vss_test))]
+use crate::io::vss_store::VssStore;
 use crate::liquidity::LiquiditySource;
 use crate::logger::{log_error, log_info, FilesystemLogger, Logger};
 use crate::message_handler::NodeCustomMessageHandler;
@@ -25,6 +27,7 @@ use crate::types::{
 	ChainMonitor, ChannelManager, DynStore, GossipSync, Graph, KeysManager, MessageRouter,
 	OnionMessenger, PeerManager,
 };
+use crate::wallet::persist::KVStoreWalletPersister;
 use crate::wallet::Wallet;
 use crate::{LogLevel, Node};
 
@@ -54,12 +57,9 @@ use lightning_transaction_sync::EsploraSyncClient;
 use lightning_liquidity::lsps2::client::LSPS2ClientConfig;
 use lightning_liquidity::{LiquidityClientConfig, LiquidityManager};
 
-#[cfg(any(vss, vss_test))]
-use crate::io::vss_store::VssStore;
-use bdk::bitcoin::secp256k1::Secp256k1;
-use bdk::blockchain::esplora::EsploraBlockchain;
-use bdk::database::SqliteDatabase;
-use bdk::template::Bip84;
+use bdk_wallet::template::Bip84;
+use bdk_wallet::KeychainKind;
+use bdk_wallet::Wallet as BdkWallet;
 
 use bip39::Mnemonic;
 
@@ -357,6 +357,8 @@ impl NodeBuilder {
 	/// previously configured.
 	#[cfg(any(vss, vss_test))]
 	pub fn build_with_vss_store(&self, url: String, store_id: String) -> Result<Node, BuildError> {
+		use bitcoin::key::Secp256k1;
+
 		let logger = setup_logger(&self.config)?;
 
 		let seed_bytes = seed_bytes_from_config(
@@ -366,14 +368,13 @@ impl NodeBuilder {
 		)?;
 		let config = Arc::new(self.config.clone());
 
-		let xprv = bitcoin::bip32::ExtendedPrivKey::new_master(config.network.into(), &seed_bytes)
-			.map_err(|e| {
-				log_error!(logger, "Failed to derive master secret: {}", e);
-				BuildError::InvalidSeedBytes
-			})?;
+		let xprv = bitcoin::bip32::Xpriv::new_master(config.network, &seed_bytes).map_err(|e| {
+			log_error!(logger, "Failed to derive master secret: {}", e);
+			BuildError::InvalidSeedBytes
+		})?;
 
 		let vss_xprv = xprv
-			.ckd_priv(&Secp256k1::new(), ChildNumber::Hardened { index: 877 })
+			.derive_priv(&Secp256k1::new(), &[ChildNumber::Hardened { index: 877 }])
 			.map_err(|e| {
 				log_error!(logger, "Failed to derive VSS secret: {}", e);
 				BuildError::KVStoreSetupFailed
@@ -555,36 +556,35 @@ fn build_with_store_internal(
 	logger: Arc<FilesystemLogger>, kv_store: Arc<DynStore>,
 ) -> Result<Node, BuildError> {
 	// Initialize the on-chain wallet and chain access
-	let xprv = bitcoin::bip32::ExtendedPrivKey::new_master(config.network.into(), &seed_bytes)
+	let xprv = bitcoin::bip32::Xpriv::new_master(config.network, &seed_bytes).map_err(|e| {
+		log_error!(logger, "Failed to derive master secret: {}", e);
+		BuildError::InvalidSeedBytes
+	})?;
+
+	let descriptor = Bip84(xprv, KeychainKind::External);
+	let change_descriptor = Bip84(xprv, KeychainKind::Internal);
+	let mut wallet_persister =
+		KVStoreWalletPersister::new(Arc::clone(&kv_store), Arc::clone(&logger));
+	let wallet_opt = BdkWallet::load()
+		.descriptor(KeychainKind::External, Some(descriptor.clone()))
+		.descriptor(KeychainKind::Internal, Some(change_descriptor.clone()))
+		.extract_keys()
+		.check_network(config.network)
+		.load_wallet(&mut wallet_persister)
 		.map_err(|e| {
-			log_error!(logger, "Failed to derive master secret: {}", e);
-			BuildError::InvalidSeedBytes
+			log_error!(logger, "Failed to set up wallet: {}", e);
+			BuildError::WalletSetupFailed
 		})?;
-
-	let wallet_name = bdk::wallet::wallet_name_from_descriptor(
-		Bip84(xprv, bdk::KeychainKind::External),
-		Some(Bip84(xprv, bdk::KeychainKind::Internal)),
-		config.network.into(),
-		&Secp256k1::new(),
-	)
-	.map_err(|e| {
-		log_error!(logger, "Failed to derive wallet name: {}", e);
-		BuildError::WalletSetupFailed
-	})?;
-
-	let database_path = format!("{}/bdk_wallet_{}.sqlite", config.storage_dir_path, wallet_name);
-	let database = SqliteDatabase::new(database_path);
-
-	let bdk_wallet = bdk::Wallet::new(
-		Bip84(xprv, bdk::KeychainKind::External),
-		Some(Bip84(xprv, bdk::KeychainKind::Internal)),
-		config.network.into(),
-		database,
-	)
-	.map_err(|e| {
-		log_error!(logger, "Failed to set up wallet: {}", e);
-		BuildError::WalletSetupFailed
-	})?;
+	let bdk_wallet = match wallet_opt {
+		Some(wallet) => wallet,
+		None => BdkWallet::create(descriptor, change_descriptor)
+			.network(config.network)
+			.create_wallet(&mut wallet_persister)
+			.map_err(|e| {
+				log_error!(logger, "Failed to set up wallet: {}", e);
+				BuildError::WalletSetupFailed
+			})?,
+	};
 
 	let (blockchain, tx_sync, tx_broadcaster, fee_estimator) = match chain_data_source_config {
 		Some(ChainDataSourceConfig::Esplora(server_url)) => {
@@ -764,7 +764,7 @@ fn build_with_store_internal(
 		} else {
 			// We're starting a fresh node.
 			let genesis_block_hash =
-				bitcoin::blockdata::constants::genesis_block(config.network.into()).block_hash();
+				bitcoin::blockdata::constants::genesis_block(config.network).block_hash();
 
 			let chain_params = ChainParameters {
 				network: config.network.into(),

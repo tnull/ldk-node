@@ -5,6 +5,8 @@
 // http://opensource.org/licenses/MIT>, at your option. You may not use this file except in
 // accordance with one or both of these licenses.
 
+use persist::KVStoreWalletPersister;
+
 use crate::logger::{log_error, log_info, log_trace, Logger};
 
 use crate::config::BDK_WALLET_SYNC_TIMEOUT_SECS;
@@ -26,8 +28,7 @@ use lightning_invoice::RawBolt11Invoice;
 
 use bdk::blockchain::EsploraBlockchain;
 use bdk_chain::ChainPosition;
-use bdk_wallet::{KeychainKind, SignOptions};
-use bdk_wallet::Wallet as BdkWallet;
+use bdk_wallet::{KeychainKind, PersistedWallet, SignOptions};
 
 use bitcoin::blockdata::constants::WITNESS_SCALE_FACTOR;
 use bitcoin::blockdata::locktime::absolute::LockTime;
@@ -62,7 +63,7 @@ where
 	// A BDK blockchain used for wallet sync.
 	blockchain: EsploraBlockchain,
 	// A BDK on-chain wallet.
-	inner: Mutex<BdkWallet>,
+	inner: Mutex<PersistedWallet<KVStoreWalletPersister>>,
 	// A cache storing the most recently retrieved fee rate estimations.
 	broadcaster: B,
 	fee_estimator: E,
@@ -78,8 +79,8 @@ where
 	L::Target: Logger,
 {
 	pub(crate) fn new(
-		blockchain: EsploraBlockchain, wallet: BdkWallet, broadcaster: B, fee_estimator: E,
-		logger: L,
+		blockchain: EsploraBlockchain, wallet: bdk_wallet::PersistedWallet<KVStoreWalletPersister>,
+		broadcaster: B, fee_estimator: E, logger: L,
 	) -> Self {
 		let inner = Mutex::new(wallet);
 		let sync_status = Mutex::new(WalletSyncStatus::Completed);
