@@ -269,7 +269,7 @@ enum PaymentFailureReason {
 [Enum]
 interface ClosureReason {
 	CounterpartyForceClosed(UntrustedString peer_msg);
-	HolderForceClosed();
+	HolderForceClosed(boolean? broadcasted_latest_txn);
 	LegacyCooperativeClosure();
 	CounterpartyInitiatedCooperativeClosure();
 	LocallyInitiatedCooperativeClosure();
@@ -281,6 +281,7 @@ interface ClosureReason {
 	CounterpartyCoopClosedUnfundedChannel();
 	FundingBatchClosure();
 	HTLCsTimedOut();
+	PeerFeerateTooLow(u32 peer_feerate_sat_per_kw, u32 required_feerate_sat_per_kw);
 };
 
 [Enum]
