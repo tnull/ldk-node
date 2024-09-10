@@ -32,7 +32,7 @@ const DEFAULT_ANCHOR_PER_CHANNEL_RESERVE_SATS: u64 = 25_000;
 pub(crate) const BDK_CLIENT_STOP_GAP: usize = 20;
 
 // The number of concurrent requests made against the API provider.
-pub(crate) const BDK_CLIENT_CONCURRENCY: u8 = 4;
+pub(crate) const BDK_CLIENT_CONCURRENCY: usize = 4;
 
 // The default Esplora server we're using.
 pub(crate) const DEFAULT_ESPLORA_SERVER_URL: &str = "https://blockstream.info/api";

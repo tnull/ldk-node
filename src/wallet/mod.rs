@@ -9,7 +9,7 @@ use persist::KVStoreWalletPersister;
 
 use crate::logger::{log_error, log_info, log_trace, Logger};
 
-use crate::config::BDK_WALLET_SYNC_TIMEOUT_SECS;
+use crate::config::{BDK_CLIENT_CONCURRENCY, BDK_CLIENT_STOP_GAP, BDK_WALLET_SYNC_TIMEOUT_SECS};
 use crate::fee_estimator::{ConfirmationTarget, FeeEstimator};
 use crate::Error;
 
@@ -26,8 +26,8 @@ use lightning::sign::{
 use lightning::util::message_signing;
 use lightning_invoice::RawBolt11Invoice;
 
-use bdk::blockchain::EsploraBlockchain;
 use bdk_chain::ChainPosition;
+use bdk_esplora::EsploraAsyncExt;
 use bdk_wallet::{KeychainKind, PersistedWallet, SignOptions};
 
 use bitcoin::blockdata::constants::WITNESS_SCALE_FACTOR;
@@ -41,6 +41,8 @@ use bitcoin::secp256k1::{PublicKey, Scalar, Secp256k1, SecretKey, Signing};
 use bitcoin::{
 	Amount, ScriptBuf, Transaction, TxOut, Txid, WPubkeyHash, WitnessProgram, WitnessVersion,
 };
+
+use esplora_client::AsyncClient as EsploraAsyncClient;
 
 use std::ops::{Deref, DerefMut};
 use std::sync::{Arc, Mutex};
@@ -60,11 +62,9 @@ where
 	E::Target: FeeEstimator,
 	L::Target: Logger,
 {
-	// A BDK blockchain used for wallet sync.
-	blockchain: EsploraBlockchain,
 	// A BDK on-chain wallet.
 	inner: Mutex<PersistedWallet<KVStoreWalletPersister>>,
-	// A cache storing the most recently retrieved fee rate estimations.
+	esplora_client: EsploraAsyncClient,
 	broadcaster: B,
 	fee_estimator: E,
 	// A Mutex holding the current sync status.
@@ -79,12 +79,12 @@ where
 	L::Target: Logger,
 {
 	pub(crate) fn new(
-		blockchain: EsploraBlockchain, wallet: bdk_wallet::PersistedWallet<KVStoreWalletPersister>,
-		broadcaster: B, fee_estimator: E, logger: L,
+		wallet: bdk_wallet::PersistedWallet<KVStoreWalletPersister>,
+		esplora_client: EsploraAsyncClient, broadcaster: B, fee_estimator: E, logger: L,
 	) -> Self {
 		let inner = Mutex::new(wallet);
 		let sync_status = Mutex::new(WalletSyncStatus::Completed);
-		Self { blockchain, inner, broadcaster, fee_estimator, sync_status, logger }
+		Self { inner, esplora_client, broadcaster, fee_estimator, sync_status, logger }
 	}
 
 	pub(crate) async fn sync(&self) -> Result<(), Error> {
@@ -98,34 +98,42 @@ where
 		}
 
 		let res = {
-			let wallet_lock = self.inner.lock().unwrap();
+			let full_scan_request = self.inner.lock().unwrap().start_full_scan().build();
 
 			let wallet_sync_timeout_fut = tokio::time::timeout(
 				Duration::from_secs(BDK_WALLET_SYNC_TIMEOUT_SECS),
-				wallet_lock.sync(&self.blockchain, SyncOptions { progress: None }),
+				self.esplora_client.full_scan(
+					full_scan_request,
+					BDK_CLIENT_STOP_GAP,
+					BDK_CLIENT_CONCURRENCY,
+				),
 			);
 
 			match wallet_sync_timeout_fut.await {
 				Ok(res) => match res {
-					Ok(()) => Ok(()),
-					Err(e) => match e {
-						bdk::Error::Esplora(ref be) => match **be {
-							bdk::blockchain::esplora::EsploraError::Reqwest(_) => {
-								log_error!(
-									self.logger,
-									"Sync failed due to HTTP connection error: {}",
-									e
-								);
-								Err(From::from(e))
-							},
-							_ => {
-								log_error!(self.logger, "Sync failed due to Esplora error: {}", e);
-								Err(From::from(e))
-							},
+					Ok(update) => match self.inner.lock().unwrap().apply_update(update) {
+						Ok(()) => Ok(()),
+						Err(e) => {
+							log_error!(
+								self.logger,
+								"Sync failed due to chain connection error: {}",
+								e
+							);
+							Err(Error::WalletOperationFailed)
+						},
+					},
+					Err(e) => match *e {
+						esplora_client::Error::Reqwest(he) => {
+							log_error!(
+								self.logger,
+								"Sync failed due to HTTP connection error: {}",
+								he
+							);
+							Err(Error::WalletOperationFailed)
 						},
 						_ => {
-							log_error!(self.logger, "Wallet sync error: {}", e);
-							Err(From::from(e))
+							log_error!(self.logger, "Sync failed due to Esplora error: {}", e);
+							Err(Error::WalletOperationFailed)
 						},
 					},
 				},

@@ -281,49 +281,44 @@ impl Node {
 			.config
 			.onchain_wallet_sync_interval_secs
 			.max(config::WALLET_SYNC_INTERVAL_MINIMUM_SECS);
-		std::thread::spawn(move || {
-			tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap().block_on(
-				async move {
-					let mut onchain_wallet_sync_interval = tokio::time::interval(
-						Duration::from_secs(onchain_wallet_sync_interval_secs),
-					);
-					onchain_wallet_sync_interval
-						.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-					loop {
-						tokio::select! {
-							_ = stop_sync.changed() => {
+		runtime.spawn(async move {
+			let mut onchain_wallet_sync_interval =
+				tokio::time::interval(Duration::from_secs(onchain_wallet_sync_interval_secs));
+			onchain_wallet_sync_interval
+				.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+			loop {
+				tokio::select! {
+					_ = stop_sync.changed() => {
+						log_trace!(
+							sync_logger,
+							"Stopping background syncing on-chain wallet.",
+							);
+						return;
+					}
+					_ = onchain_wallet_sync_interval.tick() => {
+						let now = Instant::now();
+						match wallet.sync().await {
+							Ok(()) => {
 								log_trace!(
-									sync_logger,
-									"Stopping background syncing on-chain wallet.",
-									);
-								return;
+								sync_logger,
+								"Background sync of on-chain wallet finished in {}ms.",
+								now.elapsed().as_millis()
+								);
+								let unix_time_secs_opt =
+									SystemTime::now().duration_since(UNIX_EPOCH).ok().map(|d| d.as_secs());
+								*sync_onchain_wallet_timestamp.write().unwrap() = unix_time_secs_opt;
 							}
-							_ = onchain_wallet_sync_interval.tick() => {
-								let now = Instant::now();
-								match wallet.sync().await {
-									Ok(()) => {
-										log_trace!(
-										sync_logger,
-										"Background sync of on-chain wallet finished in {}ms.",
-										now.elapsed().as_millis()
-										);
-										let unix_time_secs_opt =
-											SystemTime::now().duration_since(UNIX_EPOCH).ok().map(|d| d.as_secs());
-										*sync_onchain_wallet_timestamp.write().unwrap() = unix_time_secs_opt;
-									}
-									Err(err) => {
-										log_error!(
-											sync_logger,
-											"Background sync of on-chain wallet failed: {}",
-											err
-											)
-									}
-								}
+							Err(err) => {
+								log_error!(
+									sync_logger,
+									"Background sync of on-chain wallet failed: {}",
+									err
+									)
 							}
 						}
 					}
-				},
-			);
+				}
+			}
 		});
 
 		let mut stop_fee_updates = self.stop_sender.subscribe();

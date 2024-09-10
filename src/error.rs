@@ -6,6 +6,7 @@
 // accordance with one or both of these licenses.
 
 use bdk_chain::bitcoin::psbt::ExtractTxError as BdkExtractTxError;
+use bdk_chain::local_chain::CannotConnectError as BdkChainConnectionError;
 use bdk_wallet::error::CreateTxError as BdkCreateTxError;
 use bdk_wallet::signer::SignerError as BdkSignerError;
 
@@ -203,6 +204,12 @@ impl From<BdkCreateTxError> for Error {
 impl From<BdkExtractTxError> for Error {
 	fn from(_: BdkExtractTxError) -> Self {
 		Self::OnchainTxCreationFailed
+	}
+}
+
+impl From<BdkChainConnectionError> for Error {
+	fn from(_: BdkChainConnectionError) -> Self {
+		Self::WalletOperationFailed
 	}
 }
 
