@@ -64,6 +64,7 @@ where
 {
 	// A BDK on-chain wallet.
 	inner: Mutex<PersistedWallet<KVStoreWalletPersister>>,
+	persister: Mutex<KVStoreWalletPersister>,
 	esplora_client: EsploraAsyncClient,
 	broadcaster: B,
 	fee_estimator: E,
@@ -80,11 +81,13 @@ where
 {
 	pub(crate) fn new(
 		wallet: bdk_wallet::PersistedWallet<KVStoreWalletPersister>,
-		esplora_client: EsploraAsyncClient, broadcaster: B, fee_estimator: E, logger: L,
+		wallet_persister: KVStoreWalletPersister, esplora_client: EsploraAsyncClient,
+		broadcaster: B, fee_estimator: E, logger: L,
 	) -> Self {
 		let inner = Mutex::new(wallet);
+		let persister = Mutex::new(wallet_persister);
 		let sync_status = Mutex::new(WalletSyncStatus::Completed);
-		Self { inner, esplora_client, broadcaster, fee_estimator, sync_status, logger }
+		Self { inner, persister, esplora_client, broadcaster, fee_estimator, sync_status, logger }
 	}
 
 	pub(crate) async fn sync(&self) -> Result<(), Error> {
@@ -111,16 +114,27 @@ where
 
 			match wallet_sync_timeout_fut.await {
 				Ok(res) => match res {
-					Ok(update) => match self.inner.lock().unwrap().apply_update(update) {
-						Ok(()) => Ok(()),
-						Err(e) => {
-							log_error!(
-								self.logger,
-								"Sync failed due to chain connection error: {}",
-								e
-							);
-							Err(Error::WalletOperationFailed)
-						},
+					Ok(update) => {
+						let mut locked_wallet = self.inner.lock().unwrap();
+						match locked_wallet.apply_update(update) {
+							Ok(()) => {
+								let mut locked_persister = self.persister.lock().unwrap();
+								locked_wallet.persist(&mut locked_persister).map_err(|e| {
+									log_error!(self.logger, "Failed to persist wallet: {}", e);
+									Error::PersistenceFailed
+								})?;
+
+								Ok(())
+							},
+							Err(e) => {
+								log_error!(
+									self.logger,
+									"Sync failed due to chain connection error: {}",
+									e
+								);
+								Err(Error::WalletOperationFailed)
+							},
+						}
 					},
 					Err(e) => match *e {
 						esplora_client::Error::Reqwest(he) => {
@@ -187,6 +201,12 @@ where
 			},
 		}
 
+		let mut locked_persister = self.persister.lock().unwrap();
+		locked_wallet.persist(&mut locked_persister).map_err(|e| {
+			log_error!(self.logger, "Failed to persist wallet: {}", e);
+			Error::PersistenceFailed
+		})?;
+
 		let tx = psbt.extract_tx().map_err(|e| {
 			log_error!(self.logger, "Failed to extract transaction: {}", e);
 			e
@@ -196,12 +216,26 @@ where
 	}
 
 	pub(crate) fn get_new_address(&self) -> Result<bitcoin::Address, Error> {
-		let address_info = self.inner.lock().unwrap().reveal_next_address(KeychainKind::External);
+		let mut locked_wallet = self.inner.lock().unwrap();
+		let mut locked_persister = self.persister.lock().unwrap();
+
+		let address_info = locked_wallet.reveal_next_address(KeychainKind::External);
+		locked_wallet.persist(&mut locked_persister).map_err(|e| {
+			log_error!(self.logger, "Failed to persist wallet: {}", e);
+			Error::PersistenceFailed
+		})?;
 		Ok(address_info.address)
 	}
 
 	fn get_new_internal_address(&self) -> Result<bitcoin::Address, Error> {
-		let address_info = self.inner.lock().unwrap().next_unused_address(KeychainKind::Internal);
+		let mut locked_wallet = self.inner.lock().unwrap();
+		let mut locked_persister = self.persister.lock().unwrap();
+
+		let address_info = locked_wallet.next_unused_address(KeychainKind::Internal);
+		locked_wallet.persist(&mut locked_persister).map_err(|e| {
+			log_error!(self.logger, "Failed to persist wallet: {}", e);
+			Error::PersistenceFailed
+		})?;
 		Ok(address_info.address)
 	}
 
@@ -273,6 +307,12 @@ where
 					return Err(err.into());
 				},
 			}
+
+			let mut locked_persister = self.persister.lock().unwrap();
+			locked_wallet.persist(&mut locked_persister).map_err(|e| {
+				log_error!(self.logger, "Failed to persist wallet: {}", e);
+				Error::PersistenceFailed
+			})?;
 
 			psbt.extract_tx().map_err(|e| {
 				log_error!(self.logger, "Failed to extract transaction: {}", e);
@@ -432,7 +472,13 @@ where
 
 	fn get_change_script(&self) -> Result<ScriptBuf, ()> {
 		let mut locked_wallet = self.inner.lock().unwrap();
+		let mut locked_persister = self.persister.lock().unwrap();
+
 		let address_info = locked_wallet.next_unused_address(KeychainKind::Internal);
+		locked_wallet.persist(&mut locked_persister).map_err(|e| {
+			log_error!(self.logger, "Failed to persist wallet: {}", e);
+			()
+		})?;
 		Ok(address_info.address.script_pubkey())
 	}
 

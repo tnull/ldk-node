@@ -632,6 +632,7 @@ fn build_with_store_internal(
 	let runtime = Arc::new(RwLock::new(None));
 	let wallet = Arc::new(Wallet::new(
 		bdk_wallet,
+		wallet_persister,
 		esplora_client,
 		Arc::clone(&tx_broadcaster),
 		Arc::clone(&fee_estimator),
