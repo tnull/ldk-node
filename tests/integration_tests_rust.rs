@@ -643,7 +643,7 @@ fn generate_bip21_uri() {
 	match uqr_payment.clone() {
 		Ok(ref uri) => {
 			println!("Generated URI: {}", uri);
-			assert!(uri.contains("BITCOIN:"));
+			assert!(uri.contains("bitcoin:"));
 			assert!(uri.contains("lightning="));
 			assert!(uri.contains("lno="));
 		},
