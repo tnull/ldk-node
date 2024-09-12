@@ -264,6 +264,9 @@ enum PaymentFailureReason {
 	"PaymentExpired",
 	"RouteNotFound",
 	"UnexpectedError",
+	"UnknownRequiredFeatures",
+	"InvoiceRequestExpired",
+	"InvoiceRequestRejected",
 };
 
 [Enum]
