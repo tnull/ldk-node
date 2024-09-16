@@ -405,16 +405,6 @@ where
 							log_error!(self.logger, "Failed to retrieve script payload: {}", e);
 						})?;
 
-					let program_length = witness_program.program().len();
-					if program_length != 20 {
-						log_error!(
-							self.logger,
-							"Unexpected witness program length: {}",
-							program_length
-						);
-						continue;
-					}
-
 					let wpkh = WPubkeyHash::from_slice(&witness_program.program().as_bytes())
 						.map_err(|e| {
 							log_error!(self.logger, "Failed to retrieve script payload: {}", e);
