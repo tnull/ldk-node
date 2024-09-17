@@ -141,6 +141,13 @@ impl WalletPersister for KVStoreWalletPersister {
 			}
 		}
 
+		debug_assert!(
+			latest_change_set.descriptor.is_some()
+				&& latest_change_set.change_descriptor.is_some()
+				&& latest_change_set.network.is_some(),
+			"descriptor, change_descriptor, and network are mandatory ChangeSet fields"
+		);
+
 		// Merge and persist the sub-changesets individually if necessary.
 		//
 		// According to the BDK team the individual sub-changesets can be persisted
