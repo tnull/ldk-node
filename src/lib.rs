@@ -292,7 +292,7 @@ impl Node {
 						log_trace!(
 							sync_logger,
 							"Stopping background syncing on-chain wallet.",
-							);
+						);
 						return;
 					}
 					_ = onchain_wallet_sync_interval.tick() => {
@@ -300,9 +300,9 @@ impl Node {
 						match wallet.sync().await {
 							Ok(()) => {
 								log_trace!(
-								sync_logger,
-								"Background sync of on-chain wallet finished in {}ms.",
-								now.elapsed().as_millis()
+									sync_logger,
+									"Background sync of on-chain wallet finished in {}ms.",
+									now.elapsed().as_millis()
 								);
 								let unix_time_secs_opt =
 									SystemTime::now().duration_since(UNIX_EPOCH).ok().map(|d| d.as_secs());
@@ -313,7 +313,7 @@ impl Node {
 									sync_logger,
 									"Background sync of on-chain wallet failed: {}",
 									err
-									)
+								)
 							}
 						}
 					}
