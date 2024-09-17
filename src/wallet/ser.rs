@@ -61,7 +61,7 @@ impl Readable for ChangeSetDeserWrapper<Network> {
 impl<'a> Writeable for ChangeSetSerWrapper<'a, BdkLocalChainChangeSet> {
 	fn write<W: Writer>(&self, writer: &mut W) -> Result<(), lightning::io::Error> {
 		// We serialize a length header to make sure we can accommodate future changes to the
-		// BDK types..
+		// BDK types.
 		let total_len = BigSize(self.0.blocks.serialized_length() as u64);
 		total_len.write(writer)?;
 
@@ -81,7 +81,7 @@ impl Readable for ChangeSetDeserWrapper<BdkLocalChainChangeSet> {
 impl<'a> Writeable for ChangeSetSerWrapper<'a, BdkTxGraphChangeSet<ConfirmationBlockTime>> {
 	fn write<W: Writer>(&self, writer: &mut W) -> Result<(), lightning::io::Error> {
 		// We serialize a length header to make sure we can accommodate future changes to the
-		// BDK types..
+		// BDK types.
 		let txs_len = ChangeSetSerWrapper(&self.0.txs).serialized_length() as u64;
 		let txouts_len = self.0.txouts.serialized_length() as u64;
 		let anchors_len = ChangeSetSerWrapper(&self.0.anchors).serialized_length() as u64;
@@ -163,7 +163,7 @@ impl Readable for ChangeSetDeserWrapper<BTreeSet<Arc<Transaction>>> {
 impl<'a> Writeable for ChangeSetSerWrapper<'a, ConfirmationBlockTime> {
 	fn write<W: Writer>(&self, writer: &mut W) -> Result<(), lightning::io::Error> {
 		// We serialize a length header to make sure we can accommodate future changes to the
-		// BDK types..
+		// BDK types.
 		let block_id_len = ChangeSetSerWrapper(&self.0.block_id).serialized_length() as u64;
 		let confirmation_time_len = self.0.confirmation_time.serialized_length() as u64;
 		let total_len = BigSize(block_id_len + confirmation_time_len);
@@ -189,7 +189,7 @@ impl Readable for ChangeSetDeserWrapper<ConfirmationBlockTime> {
 impl<'a> Writeable for ChangeSetSerWrapper<'a, BlockId> {
 	fn write<W: Writer>(&self, writer: &mut W) -> Result<(), lightning::io::Error> {
 		// We serialize a length header to make sure we can accommodate future changes to the
-		// BDK types..
+		// BDK types.
 		let height_len = self.0.height.serialized_length() as u64;
 		let hash_len = self.0.hash.serialized_length() as u64;
 		let total_len = BigSize(height_len + hash_len);
@@ -213,7 +213,7 @@ impl Readable for ChangeSetDeserWrapper<BlockId> {
 impl<'a> Writeable for ChangeSetSerWrapper<'a, BdkIndexerChangeSet> {
 	fn write<W: Writer>(&self, writer: &mut W) -> Result<(), lightning::io::Error> {
 		// We serialize a length header to make sure we can accommodate future changes to the
-		// BDK types..
+		// BDK types.
 		let last_revealed_len =
 			ChangeSetSerWrapper(&self.0.last_revealed).serialized_length() as u64;
 		let total_len = BigSize(last_revealed_len);
@@ -261,7 +261,7 @@ impl Readable for ChangeSetDeserWrapper<BTreeMap<DescriptorId, u32>> {
 impl<'a> Writeable for ChangeSetSerWrapper<'a, DescriptorId> {
 	fn write<W: Writer>(&self, writer: &mut W) -> Result<(), lightning::io::Error> {
 		// We serialize a length header to make sure we can accommodate future changes to the
-		// BDK types..
+		// BDK types.
 		let hash_len = ChangeSetSerWrapper(&self.0 .0).serialized_length() as u64;
 		let total_len = BigSize(hash_len);
 		total_len.write(writer)?;
