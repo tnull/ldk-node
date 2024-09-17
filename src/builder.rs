@@ -609,7 +609,7 @@ fn build_with_store_internal(
 		None => {
 			// Default to Esplora client.
 			let server_url = DEFAULT_ESPLORA_SERVER_URL.to_string();
-			let mut client_builder = esplora_client::Builder::new(&server_url.clone());
+			let mut client_builder = esplora_client::Builder::new(&server_url);
 			client_builder = client_builder.timeout(DEFAULT_ESPLORA_CLIENT_TIMEOUT_SECS);
 			let esplora_client = client_builder.build_async().unwrap();
 			let tx_sync = Arc::new(EsploraSyncClient::from_client(
