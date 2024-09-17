@@ -6,7 +6,10 @@
 // accordance with one or both of these licenses.
 
 use lightning::ln::msgs::DecodeError;
-use lightning::util::ser::{BigSize, FixedLengthReader, Readable, Writeable, Writer};
+use lightning::util::ser::{
+	BigSize, FixedLengthReader, Readable, RequiredWrapper, Writeable, Writer,
+};
+use lightning::{decode_tlv_stream, encode_tlv_stream};
 
 use bdk_chain::bdk_core::{BlockId, ConfirmationBlockTime};
 use bdk_chain::indexer::keychain_txout::ChangeSet as BdkIndexerChangeSet;
@@ -19,7 +22,7 @@ use bdk_wallet::keys::DescriptorPublicKey;
 
 use bitcoin::hashes::sha256::Hash as Sha256Hash;
 use bitcoin::p2p::Magic;
-use bitcoin::{Network, Transaction, Txid};
+use bitcoin::{BlockHash, Network, OutPoint, Transaction, TxOut, Txid};
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::str::FromStr;
@@ -27,6 +30,24 @@ use std::sync::Arc;
 
 pub(crate) struct ChangeSetSerWrapper<'a, T>(pub &'a T);
 pub(crate) struct ChangeSetDeserWrapper<T>(pub T);
+
+macro_rules! write_len_prefixed_field {
+	( $writer: expr, $field: expr ) => {{
+		// We serialize a length header to make sure we can accommodate future changes to the
+		// BDK types.
+		let len = BigSize($field.serialized_length() as u64);
+		len.write($writer)?;
+		$field.write($writer)
+	}};
+}
+
+macro_rules! read_len_prefixed_field {
+	($reader: expr) => {{
+		let field_len: BigSize = Readable::read($reader)?;
+		let mut fixed_reader = FixedLengthReader::new($reader, field_len.0);
+		Readable::read(&mut fixed_reader)
+	}};
+}
 
 impl<'a> Writeable for ChangeSetSerWrapper<'a, Descriptor<DescriptorPublicKey>> {
 	fn write<W: Writer>(&self, writer: &mut W) -> Result<(), lightning::io::Error> {
@@ -60,55 +81,58 @@ impl Readable for ChangeSetDeserWrapper<Network> {
 
 impl<'a> Writeable for ChangeSetSerWrapper<'a, BdkLocalChainChangeSet> {
 	fn write<W: Writer>(&self, writer: &mut W) -> Result<(), lightning::io::Error> {
-		// We serialize a length header to make sure we can accommodate future changes to the
-		// BDK types.
-		let total_len = BigSize(self.0.blocks.serialized_length() as u64);
-		total_len.write(writer)?;
-
-		self.0.blocks.write(writer)
+		encode_tlv_stream!(writer, {
+			(0, self.0.blocks, required),
+		});
+		Ok(())
 	}
 }
 
 impl Readable for ChangeSetDeserWrapper<BdkLocalChainChangeSet> {
 	fn read<R: lightning::io::Read>(reader: &mut R) -> Result<Self, DecodeError> {
-		let total_len: BigSize = Readable::read(reader)?;
-		let mut fixed_reader = FixedLengthReader::new(reader, total_len.0);
-		let blocks = Readable::read(&mut fixed_reader)?;
-		Ok(Self(BdkLocalChainChangeSet { blocks }))
+		let mut blocks = RequiredWrapper(None);
+		decode_tlv_stream!(reader, {
+			(0, blocks, required),
+		});
+		Ok(Self(BdkLocalChainChangeSet { blocks: blocks.0.unwrap() }))
 	}
 }
 
 impl<'a> Writeable for ChangeSetSerWrapper<'a, BdkTxGraphChangeSet<ConfirmationBlockTime>> {
 	fn write<W: Writer>(&self, writer: &mut W) -> Result<(), lightning::io::Error> {
-		// We serialize a length header to make sure we can accommodate future changes to the
-		// BDK types.
-		let txs_len = ChangeSetSerWrapper(&self.0.txs).serialized_length() as u64;
-		let txouts_len = self.0.txouts.serialized_length() as u64;
-		let anchors_len = ChangeSetSerWrapper(&self.0.anchors).serialized_length() as u64;
-		let last_seen_len = self.0.last_seen.serialized_length() as u64;
-		let total_len = BigSize(txs_len + txouts_len + anchors_len + last_seen_len);
-		total_len.write(writer)?;
-
-		ChangeSetSerWrapper(&self.0.txs).write(writer)?;
-		self.0.txouts.write(writer)?;
-		ChangeSetSerWrapper(&self.0.anchors).write(writer)?;
-		self.0.last_seen.write(writer)?;
+		encode_tlv_stream!(writer, {
+			(0, ChangeSetSerWrapper(&self.0.txs), required),
+			(2, self.0.txouts, required),
+			(4, ChangeSetSerWrapper(&self.0.anchors), required),
+			(6, self.0.last_seen, required),
+		});
 		Ok(())
 	}
 }
 
 impl Readable for ChangeSetDeserWrapper<BdkTxGraphChangeSet<ConfirmationBlockTime>> {
 	fn read<R: lightning::io::Read>(reader: &mut R) -> Result<Self, DecodeError> {
-		let total_len: BigSize = Readable::read(reader)?;
-		let mut fixed_reader = FixedLengthReader::new(reader, total_len.0);
+		let mut txs: RequiredWrapper<ChangeSetDeserWrapper<BTreeSet<Arc<Transaction>>>> =
+			RequiredWrapper(None);
+		let mut txouts: RequiredWrapper<BTreeMap<OutPoint, TxOut>> = RequiredWrapper(None);
+		let mut anchors: RequiredWrapper<
+			ChangeSetDeserWrapper<BTreeSet<(ConfirmationBlockTime, Txid)>>,
+		> = RequiredWrapper(None);
+		let mut last_seen: RequiredWrapper<BTreeMap<Txid, u64>> = RequiredWrapper(None);
 
-		let txs: ChangeSetDeserWrapper<BTreeSet<Arc<Transaction>>> =
-			Readable::read(&mut fixed_reader)?;
-		let txouts = Readable::read(&mut fixed_reader)?;
-		let anchors: ChangeSetDeserWrapper<BTreeSet<(ConfirmationBlockTime, Txid)>> =
-			Readable::read(&mut fixed_reader)?;
-		let last_seen = Readable::read(&mut fixed_reader)?;
-		Ok(Self(BdkTxGraphChangeSet { txs: txs.0, txouts, anchors: anchors.0, last_seen }))
+		decode_tlv_stream!(reader, {
+			(0, txs, required),
+			(2, txouts, required),
+			(4, anchors, required),
+			(6, last_seen, required),
+		});
+
+		Ok(Self(BdkTxGraphChangeSet {
+			txs: txs.0.unwrap().0,
+			txouts: txouts.0.unwrap(),
+			anchors: anchors.0.unwrap().0,
+			last_seen: last_seen.0.unwrap(),
+		}))
 	}
 }
 
@@ -117,8 +141,8 @@ impl<'a> Writeable for ChangeSetSerWrapper<'a, BTreeSet<(ConfirmationBlockTime, 
 		let len = BigSize(self.0.len() as u64);
 		len.write(writer)?;
 		for (time, txid) in self.0.iter() {
-			ChangeSetSerWrapper(time).write(writer)?;
-			txid.write(writer)?;
+			write_len_prefixed_field!(writer, ChangeSetSerWrapper(time))?;
+			write_len_prefixed_field!(writer, txid)?;
 		}
 		Ok(())
 	}
@@ -129,8 +153,9 @@ impl Readable for ChangeSetDeserWrapper<BTreeSet<(ConfirmationBlockTime, Txid)>>
 		let len: BigSize = Readable::read(reader)?;
 		let mut set = BTreeSet::new();
 		for _ in 0..len.0 {
-			let time: ChangeSetDeserWrapper<ConfirmationBlockTime> = Readable::read(reader)?;
-			let txid = Readable::read(reader)?;
+			let time: ChangeSetDeserWrapper<ConfirmationBlockTime> =
+				read_len_prefixed_field!(reader)?;
+			let txid: Txid = read_len_prefixed_field!(reader)?;
 			set.insert((time.0, txid));
 		}
 		Ok(Self(set))
@@ -142,7 +167,7 @@ impl<'a> Writeable for ChangeSetSerWrapper<'a, BTreeSet<Arc<Transaction>>> {
 		let len = BigSize(self.0.len() as u64);
 		len.write(writer)?;
 		for tx in self.0.iter() {
-			tx.write(writer)?;
+			write_len_prefixed_field!(writer, tx)?;
 		}
 		Ok(())
 	}
@@ -153,8 +178,8 @@ impl Readable for ChangeSetDeserWrapper<BTreeSet<Arc<Transaction>>> {
 		let len: BigSize = Readable::read(reader)?;
 		let mut set = BTreeSet::new();
 		for _ in 0..len.0 {
-			let tx = Arc::new(Readable::read(reader)?);
-			set.insert(tx);
+			let tx: Transaction = read_len_prefixed_field!(reader)?;
+			set.insert(Arc::new(tx));
 		}
 		Ok(Self(set))
 	}
@@ -162,74 +187,69 @@ impl Readable for ChangeSetDeserWrapper<BTreeSet<Arc<Transaction>>> {
 
 impl<'a> Writeable for ChangeSetSerWrapper<'a, ConfirmationBlockTime> {
 	fn write<W: Writer>(&self, writer: &mut W) -> Result<(), lightning::io::Error> {
-		// We serialize a length header to make sure we can accommodate future changes to the
-		// BDK types.
-		let block_id_len = ChangeSetSerWrapper(&self.0.block_id).serialized_length() as u64;
-		let confirmation_time_len = self.0.confirmation_time.serialized_length() as u64;
-		let total_len = BigSize(block_id_len + confirmation_time_len);
-		total_len.write(writer)?;
-
-		ChangeSetSerWrapper(&self.0.block_id).write(writer)?;
-		self.0.confirmation_time.write(writer)
+		encode_tlv_stream!(writer, {
+			(0, ChangeSetSerWrapper(&self.0.block_id), required),
+			(2, self.0.confirmation_time, required),
+		});
+		Ok(())
 	}
 }
 
 impl Readable for ChangeSetDeserWrapper<ConfirmationBlockTime> {
 	fn read<R: lightning::io::Read>(reader: &mut R) -> Result<Self, DecodeError> {
-		let total_len: BigSize = Readable::read(reader)?;
-		let mut fixed_reader = FixedLengthReader::new(reader, total_len.0);
+		let mut block_id: RequiredWrapper<ChangeSetDeserWrapper<BlockId>> = RequiredWrapper(None);
+		let mut confirmation_time: RequiredWrapper<u64> = RequiredWrapper(None);
 
-		let block_id: ChangeSetDeserWrapper<BlockId> = Readable::read(&mut fixed_reader)?;
-		let confirmation_time = Readable::read(&mut fixed_reader)?;
+		decode_tlv_stream!(reader, {
+			(0, block_id, required),
+			(2, confirmation_time, required),
+		});
 
-		Ok(Self(ConfirmationBlockTime { block_id: block_id.0, confirmation_time }))
+		Ok(Self(ConfirmationBlockTime {
+			block_id: block_id.0.unwrap().0,
+			confirmation_time: confirmation_time.0.unwrap(),
+		}))
 	}
 }
 
 impl<'a> Writeable for ChangeSetSerWrapper<'a, BlockId> {
 	fn write<W: Writer>(&self, writer: &mut W) -> Result<(), lightning::io::Error> {
-		// We serialize a length header to make sure we can accommodate future changes to the
-		// BDK types.
-		let height_len = self.0.height.serialized_length() as u64;
-		let hash_len = self.0.hash.serialized_length() as u64;
-		let total_len = BigSize(height_len + hash_len);
-		total_len.write(writer)?;
-
-		self.0.height.write(writer)?;
-		self.0.hash.write(writer)
+		encode_tlv_stream!(writer, {
+			(0, self.0.height, required),
+			(2, self.0.hash, required),
+		});
+		Ok(())
 	}
 }
 
 impl Readable for ChangeSetDeserWrapper<BlockId> {
 	fn read<R: lightning::io::Read>(reader: &mut R) -> Result<Self, DecodeError> {
-		let total_len: BigSize = Readable::read(reader)?;
-		let mut fixed_reader = FixedLengthReader::new(reader, total_len.0);
-		let height = Readable::read(&mut fixed_reader)?;
-		let hash = Readable::read(&mut fixed_reader)?;
-		Ok(Self(BlockId { height, hash }))
+		let mut height: RequiredWrapper<u32> = RequiredWrapper(None);
+		let mut hash: RequiredWrapper<BlockHash> = RequiredWrapper(None);
+		decode_tlv_stream!(reader, {
+			(0, height, required),
+			(2, hash, required),
+		});
+
+		Ok(Self(BlockId { height: height.0.unwrap(), hash: hash.0.unwrap() }))
 	}
 }
 
 impl<'a> Writeable for ChangeSetSerWrapper<'a, BdkIndexerChangeSet> {
 	fn write<W: Writer>(&self, writer: &mut W) -> Result<(), lightning::io::Error> {
-		// We serialize a length header to make sure we can accommodate future changes to the
-		// BDK types.
-		let last_revealed_len =
-			ChangeSetSerWrapper(&self.0.last_revealed).serialized_length() as u64;
-		let total_len = BigSize(last_revealed_len);
-		total_len.write(writer)?;
-
-		ChangeSetSerWrapper(&self.0.last_revealed).write(writer)
+		encode_tlv_stream!(writer, { (0, ChangeSetSerWrapper(&self.0.last_revealed), required) });
+		Ok(())
 	}
 }
 
 impl Readable for ChangeSetDeserWrapper<BdkIndexerChangeSet> {
 	fn read<R: lightning::io::Read>(reader: &mut R) -> Result<Self, DecodeError> {
-		let total_len: BigSize = Readable::read(reader)?;
-		let mut fixed_reader = FixedLengthReader::new(reader, total_len.0);
-		let last_revealed: ChangeSetDeserWrapper<BTreeMap<DescriptorId, u32>> =
-			Readable::read(&mut fixed_reader)?;
-		Ok(Self(BdkIndexerChangeSet { last_revealed: last_revealed.0 }))
+		let mut last_revealed: RequiredWrapper<ChangeSetDeserWrapper<BTreeMap<DescriptorId, u32>>> =
+			RequiredWrapper(None);
+
+		decode_tlv_stream!(reader, { (0, last_revealed, required) });
+
+		Ok(Self(BdkIndexerChangeSet { last_revealed: last_revealed.0.unwrap().0 }))
 	}
 }
 
@@ -238,8 +258,8 @@ impl<'a> Writeable for ChangeSetSerWrapper<'a, BTreeMap<DescriptorId, u32>> {
 		let len = BigSize(self.0.len() as u64);
 		len.write(writer)?;
 		for (descriptor_id, last_index) in self.0.iter() {
-			ChangeSetSerWrapper(descriptor_id).write(writer)?;
-			last_index.write(writer)?;
+			write_len_prefixed_field!(writer, ChangeSetSerWrapper(descriptor_id))?;
+			write_len_prefixed_field!(writer, last_index)?;
 		}
 		Ok(())
 	}
@@ -250,8 +270,9 @@ impl Readable for ChangeSetDeserWrapper<BTreeMap<DescriptorId, u32>> {
 		let len: BigSize = Readable::read(reader)?;
 		let mut set = BTreeMap::new();
 		for _ in 0..len.0 {
-			let descriptor_id: ChangeSetDeserWrapper<DescriptorId> = Readable::read(reader)?;
-			let last_index = Readable::read(reader)?;
+			let descriptor_id: ChangeSetDeserWrapper<DescriptorId> =
+				read_len_prefixed_field!(reader)?;
+			let last_index: u32 = read_len_prefixed_field!(reader)?;
 			set.insert(descriptor_id.0, last_index);
 		}
 		Ok(Self(set))
@@ -260,22 +281,18 @@ impl Readable for ChangeSetDeserWrapper<BTreeMap<DescriptorId, u32>> {
 
 impl<'a> Writeable for ChangeSetSerWrapper<'a, DescriptorId> {
 	fn write<W: Writer>(&self, writer: &mut W) -> Result<(), lightning::io::Error> {
-		// We serialize a length header to make sure we can accommodate future changes to the
-		// BDK types.
-		let hash_len = ChangeSetSerWrapper(&self.0 .0).serialized_length() as u64;
-		let total_len = BigSize(hash_len);
-		total_len.write(writer)?;
-
-		ChangeSetSerWrapper(&self.0 .0).write(writer)
+		encode_tlv_stream!(writer, { (0, ChangeSetSerWrapper(&self.0 .0), required) });
+		Ok(())
 	}
 }
 
 impl Readable for ChangeSetDeserWrapper<DescriptorId> {
 	fn read<R: lightning::io::Read>(reader: &mut R) -> Result<Self, DecodeError> {
-		let total_len: BigSize = Readable::read(reader)?;
-		let mut fixed_reader = FixedLengthReader::new(reader, total_len.0);
-		let hash: ChangeSetDeserWrapper<Sha256Hash> = Readable::read(&mut fixed_reader)?;
-		Ok(Self(DescriptorId(hash.0)))
+		let mut hash: RequiredWrapper<ChangeSetDeserWrapper<Sha256Hash>> = RequiredWrapper(None);
+
+		decode_tlv_stream!(reader, { (0, hash, required) });
+
+		Ok(Self(DescriptorId(hash.0.unwrap().0)))
 	}
 }
 
