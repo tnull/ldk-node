@@ -26,17 +26,26 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::str::FromStr;
 use std::sync::Arc;
 
+const CHANGESET_SERIALIZATION_VERSION: u8 = 1;
+
 pub(crate) struct ChangeSetSerWrapper<'a, T>(pub &'a T);
 pub(crate) struct ChangeSetDeserWrapper<T>(pub T);
 
 impl<'a> Writeable for ChangeSetSerWrapper<'a, Descriptor<DescriptorPublicKey>> {
 	fn write<W: Writer>(&self, writer: &mut W) -> Result<(), lightning::io::Error> {
+		CHANGESET_SERIALIZATION_VERSION.write(writer)?;
+
 		self.0.to_string().write(writer)
 	}
 }
 
 impl Readable for ChangeSetDeserWrapper<Descriptor<DescriptorPublicKey>> {
 	fn read<R: lightning::io::Read>(reader: &mut R) -> Result<Self, DecodeError> {
+		let version: u8 = Readable::read(reader)?;
+		if version != CHANGESET_SERIALIZATION_VERSION {
+			return Err(DecodeError::UnknownVersion);
+		}
+
 		let descriptor_str: String = Readable::read(reader)?;
 		let descriptor = Descriptor::<DescriptorPublicKey>::from_str(&descriptor_str)
 			.map_err(|_| DecodeError::InvalidValue)?;
@@ -46,12 +55,19 @@ impl Readable for ChangeSetDeserWrapper<Descriptor<DescriptorPublicKey>> {
 
 impl<'a> Writeable for ChangeSetSerWrapper<'a, Network> {
 	fn write<W: Writer>(&self, writer: &mut W) -> Result<(), lightning::io::Error> {
+		CHANGESET_SERIALIZATION_VERSION.write(writer)?;
+
 		self.0.magic().to_bytes().write(writer)
 	}
 }
 
 impl Readable for ChangeSetDeserWrapper<Network> {
 	fn read<R: lightning::io::Read>(reader: &mut R) -> Result<Self, DecodeError> {
+		let version: u8 = Readable::read(reader)?;
+		if version != CHANGESET_SERIALIZATION_VERSION {
+			return Err(DecodeError::UnknownVersion);
+		}
+
 		let buf: [u8; 4] = Readable::read(reader)?;
 		let magic = Magic::from_bytes(buf);
 		let network = Network::from_magic(magic).ok_or(DecodeError::InvalidValue)?;
@@ -61,6 +77,8 @@ impl Readable for ChangeSetDeserWrapper<Network> {
 
 impl<'a> Writeable for ChangeSetSerWrapper<'a, BdkLocalChainChangeSet> {
 	fn write<W: Writer>(&self, writer: &mut W) -> Result<(), lightning::io::Error> {
+		CHANGESET_SERIALIZATION_VERSION.write(writer)?;
+
 		encode_tlv_stream!(writer, {
 			(0, self.0.blocks, required),
 		});
@@ -70,6 +88,11 @@ impl<'a> Writeable for ChangeSetSerWrapper<'a, BdkLocalChainChangeSet> {
 
 impl Readable for ChangeSetDeserWrapper<BdkLocalChainChangeSet> {
 	fn read<R: lightning::io::Read>(reader: &mut R) -> Result<Self, DecodeError> {
+		let version: u8 = Readable::read(reader)?;
+		if version != CHANGESET_SERIALIZATION_VERSION {
+			return Err(DecodeError::UnknownVersion);
+		}
+
 		let mut blocks = RequiredWrapper(None);
 		decode_tlv_stream!(reader, {
 			(0, blocks, required),
@@ -80,6 +103,8 @@ impl Readable for ChangeSetDeserWrapper<BdkLocalChainChangeSet> {
 
 impl<'a> Writeable for ChangeSetSerWrapper<'a, BdkTxGraphChangeSet<ConfirmationBlockTime>> {
 	fn write<W: Writer>(&self, writer: &mut W) -> Result<(), lightning::io::Error> {
+		CHANGESET_SERIALIZATION_VERSION.write(writer)?;
+
 		encode_tlv_stream!(writer, {
 			(0, ChangeSetSerWrapper(&self.0.txs), required),
 			(2, self.0.txouts, required),
@@ -92,6 +117,11 @@ impl<'a> Writeable for ChangeSetSerWrapper<'a, BdkTxGraphChangeSet<ConfirmationB
 
 impl Readable for ChangeSetDeserWrapper<BdkTxGraphChangeSet<ConfirmationBlockTime>> {
 	fn read<R: lightning::io::Read>(reader: &mut R) -> Result<Self, DecodeError> {
+		let version: u8 = Readable::read(reader)?;
+		if version != CHANGESET_SERIALIZATION_VERSION {
+			return Err(DecodeError::UnknownVersion);
+		}
+
 		let mut txs: RequiredWrapper<ChangeSetDeserWrapper<BTreeSet<Arc<Transaction>>>> =
 			RequiredWrapper(None);
 		let mut txouts: RequiredWrapper<BTreeMap<OutPoint, TxOut>> = RequiredWrapper(None);
@@ -228,6 +258,8 @@ impl Readable for ChangeSetDeserWrapper<BlockId> {
 
 impl<'a> Writeable for ChangeSetSerWrapper<'a, BdkIndexerChangeSet> {
 	fn write<W: Writer>(&self, writer: &mut W) -> Result<(), lightning::io::Error> {
+		CHANGESET_SERIALIZATION_VERSION.write(writer)?;
+
 		encode_tlv_stream!(writer, { (0, ChangeSetSerWrapper(&self.0.last_revealed), required) });
 		Ok(())
 	}
@@ -235,6 +267,11 @@ impl<'a> Writeable for ChangeSetSerWrapper<'a, BdkIndexerChangeSet> {
 
 impl Readable for ChangeSetDeserWrapper<BdkIndexerChangeSet> {
 	fn read<R: lightning::io::Read>(reader: &mut R) -> Result<Self, DecodeError> {
+		let version: u8 = Readable::read(reader)?;
+		if version != CHANGESET_SERIALIZATION_VERSION {
+			return Err(DecodeError::UnknownVersion);
+		}
+
 		let mut last_revealed: RequiredWrapper<ChangeSetDeserWrapper<BTreeMap<DescriptorId, u32>>> =
 			RequiredWrapper(None);
 
