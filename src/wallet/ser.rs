@@ -6,10 +6,8 @@
 // accordance with one or both of these licenses.
 
 use lightning::ln::msgs::DecodeError;
-use lightning::util::ser::{
-	BigSize, FixedLengthReader, Readable, RequiredWrapper, Writeable, Writer,
-};
-use lightning::{decode_tlv_stream, encode_tlv_stream};
+use lightning::util::ser::{BigSize, Readable, RequiredWrapper, Writeable, Writer};
+use lightning::{decode_tlv_stream, encode_tlv_stream, read_tlv_fields, write_tlv_fields};
 
 use bdk_chain::bdk_core::{BlockId, ConfirmationBlockTime};
 use bdk_chain::indexer::keychain_txout::ChangeSet as BdkIndexerChangeSet;
@@ -30,24 +28,6 @@ use std::sync::Arc;
 
 pub(crate) struct ChangeSetSerWrapper<'a, T>(pub &'a T);
 pub(crate) struct ChangeSetDeserWrapper<T>(pub T);
-
-macro_rules! write_len_prefixed_field {
-	( $writer: expr, $field: expr ) => {{
-		// We serialize a length header to make sure we can accommodate future changes to the
-		// BDK types.
-		let len = BigSize($field.serialized_length() as u64);
-		len.write($writer)?;
-		$field.write($writer)
-	}};
-}
-
-macro_rules! read_len_prefixed_field {
-	($reader: expr) => {{
-		let field_len: BigSize = Readable::read($reader)?;
-		let mut fixed_reader = FixedLengthReader::new($reader, field_len.0);
-		Readable::read(&mut fixed_reader)
-	}};
-}
 
 impl<'a> Writeable for ChangeSetSerWrapper<'a, Descriptor<DescriptorPublicKey>> {
 	fn write<W: Writer>(&self, writer: &mut W) -> Result<(), lightning::io::Error> {
@@ -141,8 +121,10 @@ impl<'a> Writeable for ChangeSetSerWrapper<'a, BTreeSet<(ConfirmationBlockTime, 
 		let len = BigSize(self.0.len() as u64);
 		len.write(writer)?;
 		for (time, txid) in self.0.iter() {
-			write_len_prefixed_field!(writer, ChangeSetSerWrapper(time))?;
-			write_len_prefixed_field!(writer, txid)?;
+			write_tlv_fields!(writer, {
+				(0, ChangeSetSerWrapper(time), required),
+				(2, txid, required),
+			});
 		}
 		Ok(())
 	}
@@ -153,10 +135,14 @@ impl Readable for ChangeSetDeserWrapper<BTreeSet<(ConfirmationBlockTime, Txid)>>
 		let len: BigSize = Readable::read(reader)?;
 		let mut set = BTreeSet::new();
 		for _ in 0..len.0 {
-			let time: ChangeSetDeserWrapper<ConfirmationBlockTime> =
-				read_len_prefixed_field!(reader)?;
-			let txid: Txid = read_len_prefixed_field!(reader)?;
-			set.insert((time.0, txid));
+			let mut time: RequiredWrapper<ChangeSetDeserWrapper<ConfirmationBlockTime>> =
+				RequiredWrapper(None);
+			let mut txid: RequiredWrapper<Txid> = RequiredWrapper(None);
+			read_tlv_fields!(reader, {
+				(0, time, required),
+				(2, txid, required),
+			});
+			set.insert((time.0.unwrap().0, txid.0.unwrap()));
 		}
 		Ok(Self(set))
 	}
@@ -167,7 +153,9 @@ impl<'a> Writeable for ChangeSetSerWrapper<'a, BTreeSet<Arc<Transaction>>> {
 		let len = BigSize(self.0.len() as u64);
 		len.write(writer)?;
 		for tx in self.0.iter() {
-			write_len_prefixed_field!(writer, tx)?;
+			write_tlv_fields!(writer, {
+				(0, tx, required),
+			});
 		}
 		Ok(())
 	}
@@ -178,8 +166,11 @@ impl Readable for ChangeSetDeserWrapper<BTreeSet<Arc<Transaction>>> {
 		let len: BigSize = Readable::read(reader)?;
 		let mut set = BTreeSet::new();
 		for _ in 0..len.0 {
-			let tx: Transaction = read_len_prefixed_field!(reader)?;
-			set.insert(Arc::new(tx));
+			let mut tx: RequiredWrapper<Transaction> = RequiredWrapper(None);
+			read_tlv_fields!(reader, {
+				(0, tx, required),
+			});
+			set.insert(Arc::new(tx.0.unwrap()));
 		}
 		Ok(Self(set))
 	}
@@ -258,8 +249,10 @@ impl<'a> Writeable for ChangeSetSerWrapper<'a, BTreeMap<DescriptorId, u32>> {
 		let len = BigSize(self.0.len() as u64);
 		len.write(writer)?;
 		for (descriptor_id, last_index) in self.0.iter() {
-			write_len_prefixed_field!(writer, ChangeSetSerWrapper(descriptor_id))?;
-			write_len_prefixed_field!(writer, last_index)?;
+			write_tlv_fields!(writer, {
+				(0, ChangeSetSerWrapper(descriptor_id), required),
+				(2, last_index, required),
+			});
 		}
 		Ok(())
 	}
@@ -270,10 +263,14 @@ impl Readable for ChangeSetDeserWrapper<BTreeMap<DescriptorId, u32>> {
 		let len: BigSize = Readable::read(reader)?;
 		let mut set = BTreeMap::new();
 		for _ in 0..len.0 {
-			let descriptor_id: ChangeSetDeserWrapper<DescriptorId> =
-				read_len_prefixed_field!(reader)?;
-			let last_index: u32 = read_len_prefixed_field!(reader)?;
-			set.insert(descriptor_id.0, last_index);
+			let mut descriptor_id: RequiredWrapper<ChangeSetDeserWrapper<DescriptorId>> =
+				RequiredWrapper(None);
+			let mut last_index: RequiredWrapper<u32> = RequiredWrapper(None);
+			read_tlv_fields!(reader, {
+				(0, descriptor_id, required),
+				(2, last_index, required),
+			});
+			set.insert(descriptor_id.0.unwrap().0, last_index.0.unwrap());
 		}
 		Ok(Self(set))
 	}
