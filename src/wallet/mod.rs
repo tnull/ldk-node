@@ -26,7 +26,7 @@ use lightning::sign::{
 use lightning::util::message_signing;
 use lightning_invoice::RawBolt11Invoice;
 
-use bdk_chain::ChainPosition;
+use bdk_chain::{ChainPosition, Merge};
 use bdk_esplora::EsploraAsyncExt;
 use bdk_wallet::{KeychainKind, PersistedWallet, SignOptions};
 
@@ -270,6 +270,8 @@ where
 
 		let tx = {
 			let mut locked_wallet = self.inner.lock().unwrap();
+			let clean_stage_prior = locked_wallet.staged().is_none();
+
 			let mut tx_builder = locked_wallet.build_tx();
 
 			if let Some(amount) = amount_or_drain {
@@ -285,13 +287,43 @@ where
 					.enable_rbf();
 			}
 
-			let mut psbt = match tx_builder.finish() {
+			macro_rules! undo_staged_changes {
+				() => {
+					// If no changes were pending before we started, undo all staged changes in case of
+					// a failure. If there now are any pending changes at all, this should only concern
+					// `ChangeSet::indexer` as we may have advanced the internal descriptors's state by
+					// adding a change output.
+					//
+					// If there *were* pending changes, we don't want to risk losing them and hence
+					// proceed without doing anything here.
+					if clean_stage_prior {
+						if let Some(change_set) = locked_wallet.take_staged() {
+							debug_assert!(
+								change_set.local_chain.is_empty(),
+								"We don't expect any changes to local_chain here."
+							);
+							debug_assert!(
+								change_set.tx_graph.is_empty(),
+								"We don't expect any changes to tx_graph here."
+							);
+							debug_assert!(
+								!change_set.indexer.is_empty(),
+								"We expect changes to indexer here."
+							);
+						}
+					}
+				};
+			}
+
+			let psbt_res = tx_builder.finish();
+			let mut psbt = match psbt_res {
 				Ok(psbt) => {
 					log_trace!(self.logger, "Created PSBT: {:?}", psbt);
 					psbt
 				},
 				Err(err) => {
 					log_error!(self.logger, "Failed to create transaction: {}", err);
+					undo_staged_changes!();
 					return Err(err.into());
 				},
 			};
@@ -299,25 +331,31 @@ where
 			match locked_wallet.sign(&mut psbt, SignOptions::default()) {
 				Ok(finalized) => {
 					if !finalized {
+						undo_staged_changes!();
 						return Err(Error::OnchainTxCreationFailed);
 					}
 				},
 				Err(err) => {
 					log_error!(self.logger, "Failed to create transaction: {}", err);
+					undo_staged_changes!();
 					return Err(err.into());
 				},
 			}
 
+			let tx = psbt.extract_tx().map_err(|e| {
+				log_error!(self.logger, "Failed to extract transaction: {}", e);
+				undo_staged_changes!();
+				e
+			})?;
+
 			let mut locked_persister = self.persister.lock().unwrap();
 			locked_wallet.persist(&mut locked_persister).map_err(|e| {
 				log_error!(self.logger, "Failed to persist wallet: {}", e);
+				undo_staged_changes!();
 				Error::PersistenceFailed
 			})?;
 
-			psbt.extract_tx().map_err(|e| {
-				log_error!(self.logger, "Failed to extract transaction: {}", e);
-				e
-			})?
+			tx
 		};
 
 		self.broadcaster.broadcast_transactions(&[&tx]);
