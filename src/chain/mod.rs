@@ -908,8 +908,19 @@ impl ChainSource {
 							log_error!(logger, "Failed to retrieve fee rate estimates: {}", e);
 							return Err(Error::FeerateEstimationUpdateFailed);
 						},
+						(Err(e), n) if n == Network::Regtest || n == Network::Signet => {
+							// On regtest/signet we just fall back to the usual 1 sat/vb == 250
+							// sat/kwu default.
+							log_error!(
+								logger,
+								"Failed to retrieve fee rate estimates: {}. Falling back to default of 1 sat/vb.",
+								e,
+							);
+							FeeRate::from_sat_per_kwu(250)
+						},
 						(Err(e), _) => {
-							// On regtest/testnet/signet we just skip, which will have us falling back to defaults.
+							// On testnet `estimatesmartfee` can be unreliable so we just skip in
+							// case of a failure, which will have us falling back to defaults.
 							log_error!(
 								logger,
 								"Failed to retrieve fee rate estimates: {}. Falling back to defaults.",
