@@ -649,8 +649,8 @@ impl ChainSource {
 				let chain_listener = ChainListener {
 					onchain_wallet: Arc::clone(&onchain_wallet),
 					channel_manager: Arc::clone(&channel_manager),
-					chain_monitor: Arc::clone(&chain_monitor),
-					output_sweeper: Arc::clone(&output_sweeper),
+					chain_monitor,
+					output_sweeper,
 				};
 				let mut spv_client = SpvClient::new(
 					chain_tip,
