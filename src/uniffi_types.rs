@@ -14,6 +14,7 @@ pub use crate::config::{
 	default_config, AnchorChannelsConfig, EsploraSyncConfig, MaxDustHTLCExposure,
 };
 pub use crate::graph::{ChannelInfo, ChannelUpdateInfo, NodeAnnouncementInfo, NodeInfo};
+pub use crate::liquidity::LSPS1OrderStatus;
 pub use crate::payment::store::{LSPFeeLimits, PaymentDirection, PaymentKind, PaymentStatus};
 pub use crate::payment::{MaxTotalRoutingFeeLimit, QrPaymentResult, SendingParameters};
 
@@ -30,11 +31,18 @@ pub use lightning_types::payment::{PaymentHash, PaymentPreimage, PaymentSecret};
 
 pub use lightning_invoice::Bolt11Invoice;
 
-pub use bitcoin::{Address, BlockHash, Network, OutPoint, Txid};
+pub use lightning_liquidity::lsps1::msgs::ChannelInfo as ChannelOrderInfo;
+pub use lightning_liquidity::lsps1::msgs::{
+	Bolt11PaymentInfo, OnchainPaymentInfo, OrderId, OrderParameters, PaymentInfo, PaymentState,
+};
+
+pub use bitcoin::{Address, BlockHash, FeeRate, Network, OutPoint, Txid};
 
 pub use bip39::Mnemonic;
 
 pub use vss_client::headers::{VssHeaderProvider, VssHeaderProviderError};
+
+pub type DateTime = chrono::DateTime<chrono::Utc>;
 
 use crate::UniffiCustomTypeConverter;
 
@@ -339,6 +347,43 @@ impl UniffiCustomTypeConverter for NodeAlias {
 
 	fn into_custom(val: Self::Builtin) -> uniffi::Result<Self> {
 		Ok(sanitize_alias(&val).map_err(|_| Error::InvalidNodeAlias)?)
+	}
+
+	fn from_custom(obj: Self) -> Self::Builtin {
+		obj.to_string()
+	}
+}
+
+impl UniffiCustomTypeConverter for OrderId {
+	type Builtin = String;
+
+	fn into_custom(val: Self::Builtin) -> uniffi::Result<Self> {
+		Ok(Self(val))
+	}
+
+	fn from_custom(obj: Self) -> Self::Builtin {
+		obj.0
+	}
+}
+
+impl UniffiCustomTypeConverter for DateTime {
+	type Builtin = String;
+
+	fn into_custom(val: Self::Builtin) -> uniffi::Result<Self> {
+		Ok(DateTime::from_str(&val).map_err(|_| Error::InvalidDateTime)?)
+	}
+
+	fn from_custom(obj: Self) -> Self::Builtin {
+		obj.to_rfc3339()
+	}
+}
+
+/// FIXME TODO
+impl UniffiCustomTypeConverter for FeeRate {
+	type Builtin = String;
+
+	fn into_custom(val: Self::Builtin) -> uniffi::Result<Self> {
+		Ok(FeeRate::from_str(&val).map_err(|_| Error::InvalidFeeRate)?)
 	}
 
 	fn from_custom(obj: Self) -> Self::Builtin {
