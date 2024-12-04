@@ -84,7 +84,7 @@ mod gossip;
 pub mod graph;
 mod hex_utils;
 pub mod io;
-mod liquidity;
+pub mod liquidity;
 mod logger;
 mod message_handler;
 pub mod payment;
@@ -100,6 +100,7 @@ pub use bip39;
 pub use bitcoin;
 pub use lightning;
 pub use lightning_invoice;
+pub use lightning_liquidity;
 pub use lightning_types;
 pub use vss_client;
 
@@ -130,7 +131,7 @@ use event::{EventHandler, EventQueue};
 use gossip::GossipSource;
 use graph::NetworkGraph;
 use io::utils::write_node_metrics;
-use liquidity::LiquiditySource;
+use liquidity::{LiquiditySource, Lsps1Liquidity};
 use payment::store::PaymentStore;
 use payment::{
 	Bolt11Payment, Bolt12Payment, OnchainPayment, PaymentDetails, SpontaneousPayment,
@@ -955,6 +956,34 @@ impl Node {
 			self.bolt11_payment(),
 			self.bolt12_payment(),
 			Arc::clone(&self.config),
+			Arc::clone(&self.logger),
+		))
+	}
+
+	/// Returns a liquidity handler allowing to request channels via the [LSPS1] protocol.
+	///
+	/// [LSPS1]: https://github.com/BitcoinAndLightningLayerSpecs/lsp/tree/main/LSPS1
+	#[cfg(not(feature = "uniffi"))]
+	pub fn lsps1_liquidity(&self) -> Lsps1Liquidity {
+		Lsps1Liquidity::new(
+			Arc::clone(&self.runtime),
+			Arc::clone(&self.wallet),
+			Arc::clone(&self.connection_manager),
+			self.liquidity_source.clone(),
+			Arc::clone(&self.logger),
+		)
+	}
+
+	/// Returns a liquidity handler allowing to request channels via the [LSPS1] protocol.
+	///
+	/// [LSPS1]: https://github.com/BitcoinAndLightningLayerSpecs/lsp/tree/main/LSPS1
+	#[cfg(feature = "uniffi")]
+	pub fn lsps1_liquidity(&self) -> Arc<Lsps1Liquidity> {
+		Arc::new(Lsps1Liquidity::new(
+			Arc::clone(&self.runtime),
+			Arc::clone(&self.wallet),
+			Arc::clone(&self.connection_manager),
+			self.liquidity_source.clone(),
 			Arc::clone(&self.logger),
 		))
 	}
