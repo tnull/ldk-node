@@ -14,6 +14,7 @@ use crate::{
 
 use crate::connection::ConnectionManager;
 use crate::fee_estimator::ConfirmationTarget;
+use crate::liquidity::LiquiditySource;
 
 use crate::payment::store::{
 	PaymentDetails, PaymentDetailsUpdate, PaymentDirection, PaymentKind, PaymentStatus,
@@ -24,7 +25,7 @@ use crate::io::{
 	EVENT_QUEUE_PERSISTENCE_KEY, EVENT_QUEUE_PERSISTENCE_PRIMARY_NAMESPACE,
 	EVENT_QUEUE_PERSISTENCE_SECONDARY_NAMESPACE,
 };
-use crate::logger::{log_debug, log_error, log_info, Logger};
+use crate::logger::{log_debug, log_error, log_info, FilesystemLogger, Logger};
 
 use lightning::events::bump_transaction::BumpTransactionEvent;
 use lightning::events::{ClosureReason, PaymentPurpose, ReplayEvent};
@@ -432,6 +433,7 @@ where
 	connection_manager: Arc<ConnectionManager<L>>,
 	output_sweeper: Arc<Sweeper>,
 	network_graph: Arc<Graph>,
+	liquidity_source: Option<Arc<LiquiditySource<Arc<FilesystemLogger>>>>,
 	payment_store: Arc<PaymentStore<L>>,
 	peer_store: Arc<PeerStore<L>>,
 	runtime: Arc<RwLock<Option<Arc<tokio::runtime::Runtime>>>>,
@@ -448,6 +450,7 @@ where
 		bump_tx_event_handler: Arc<BumpTransactionEventHandler>,
 		channel_manager: Arc<ChannelManager>, connection_manager: Arc<ConnectionManager<L>>,
 		output_sweeper: Arc<Sweeper>, network_graph: Arc<Graph>,
+		liquidity_source: Option<Arc<LiquiditySource<Arc<FilesystemLogger>>>>,
 		payment_store: Arc<PaymentStore<L>>, peer_store: Arc<PeerStore<L>>,
 		runtime: Arc<RwLock<Option<Arc<tokio::runtime::Runtime>>>>, logger: L, config: Arc<Config>,
 	) -> Self {
@@ -459,6 +462,7 @@ where
 			connection_manager,
 			output_sweeper,
 			network_graph,
+			liquidity_source,
 			payment_store,
 			peer_store,
 			logger,
@@ -994,7 +998,11 @@ where
 			LdkEvent::PaymentPathFailed { .. } => {},
 			LdkEvent::ProbeSuccessful { .. } => {},
 			LdkEvent::ProbeFailed { .. } => {},
-			LdkEvent::HTLCHandlingFailed { .. } => {},
+			LdkEvent::HTLCHandlingFailed { failed_next_destination, .. } => {
+				if let Some(liquidity_source) = self.liquidity_source.as_ref() {
+					liquidity_source.handle_htlc_handling_failed(failed_next_destination);
+				}
+			},
 			LdkEvent::PendingHTLCsForwardable { time_forwardable } => {
 				let forwarding_channel_manager = self.channel_manager.clone();
 				let min = time_forwardable.as_millis() as u64;
@@ -1211,6 +1219,10 @@ where
 						fee_earned,
 					);
 				}
+
+				if let Some(liquidity_source) = self.liquidity_source.as_ref() {
+					liquidity_source.handle_payment_forwarded(next_channel_id);
+				}
 			},
 			LdkEvent::ChannelPending {
 				channel_id,
@@ -1284,6 +1296,14 @@ where
 					counterparty_node_id,
 				);
 
+				if let Some(liquidity_source) = self.liquidity_source.as_ref() {
+					liquidity_source.handle_channel_ready(
+						user_channel_id,
+						&channel_id,
+						&counterparty_node_id,
+					);
+				}
+
 				let event = Event::ChannelReady {
 					channel_id,
 					user_channel_id: UserChannelId(user_channel_id),
@@ -1322,7 +1342,22 @@ where
 				};
 			},
 			LdkEvent::DiscardFunding { .. } => {},
-			LdkEvent::HTLCIntercepted { .. } => {},
+			LdkEvent::HTLCIntercepted {
+				requested_next_hop_scid,
+				intercept_id,
+				expected_outbound_amount_msat,
+				payment_hash,
+				..
+			} => {
+				if let Some(liquidity_source) = self.liquidity_source.as_ref() {
+					liquidity_source.handle_htlc_intercepted(
+						requested_next_hop_scid,
+						intercept_id,
+						expected_outbound_amount_msat,
+						payment_hash,
+					);
+				}
+			},
 			LdkEvent::InvoiceReceived { .. } => {
 				debug_assert!(false, "We currently don't handle BOLT12 invoices manually, so this event should never be emitted.");
 			},

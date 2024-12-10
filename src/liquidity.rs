@@ -13,8 +13,11 @@ use crate::logger::{log_debug, log_error, log_info, FilesystemLogger, Logger};
 use crate::types::{ChannelManager, KeysManager, LiquidityManager, PeerManager, Wallet};
 use crate::{Config, Error};
 
-use lightning::ln::channelmanager::MIN_FINAL_CLTV_EXPIRY_DELTA;
+use lightning::events::HTLCDestination;
+use lightning::ln::channelmanager::{InterceptId, MIN_FINAL_CLTV_EXPIRY_DELTA};
 use lightning::ln::msgs::SocketAddress;
+use lightning::ln::types::ChannelId;
+use lightning::ln::PaymentHash;
 use lightning::routing::router::{RouteHint, RouteHintHop};
 use lightning_invoice::{Bolt11Invoice, InvoiceBuilder, RoutingFees};
 use lightning_liquidity::events::Event;
@@ -892,6 +895,54 @@ where
 				log_error!(self.logger, "Failed to build and sign invoice: {}", e);
 				Error::InvoiceCreationFailed
 			})
+	}
+
+	pub(crate) fn handle_channel_ready(
+		&self, user_channel_id: u128, channel_id: &ChannelId, counterparty_node_id: &PublicKey,
+	) {
+		if let Some(lsps2_service_handler) = self.liquidity_manager.lsps2_service_handler() {
+			if let Err(e) = lsps2_service_handler.channel_ready(
+				user_channel_id,
+				channel_id,
+				counterparty_node_id,
+			) {
+				log_error!(self.logger, "Errored processing ChannelReady event: {:?}", e);
+			}
+		}
+	}
+
+	pub(crate) fn handle_htlc_intercepted(
+		&self, intercept_scid: u64, intercept_id: InterceptId, expected_outbound_amount_msat: u64,
+		payment_hash: PaymentHash,
+	) {
+		if let Some(lsps2_service_handler) = self.liquidity_manager.lsps2_service_handler() {
+			if let Err(e) = lsps2_service_handler.htlc_intercepted(
+				intercept_scid,
+				intercept_id,
+				expected_outbound_amount_msat,
+				payment_hash,
+			) {
+				log_error!(self.logger, "Failed to handle HTLCIntercepted event: {:?}", e);
+			}
+		}
+	}
+
+	pub(crate) fn handle_htlc_handling_failed(&self, failed_next_destination: HTLCDestination) {
+		if let Some(lsps2_service_handler) = self.liquidity_manager.lsps2_service_handler() {
+			if let Err(e) = lsps2_service_handler.htlc_handling_failed(failed_next_destination) {
+				log_error!(self.logger, "Errored processing HTLCHandlingFailed event: {:?}", e);
+			}
+		}
+	}
+
+	pub(crate) fn handle_payment_forwarded(&self, next_channel_id: Option<ChannelId>) {
+		if let Some(next_channel_id) = next_channel_id {
+			if let Some(lsps2_service_handler) = self.liquidity_manager.lsps2_service_handler() {
+				if let Err(e) = lsps2_service_handler.payment_forwarded(next_channel_id) {
+					log_error!(self.logger, "Failed to handle PaymentForwarded: {:?}", e);
+				}
+			}
+		}
 	}
 }
 
