@@ -28,15 +28,15 @@ panic = 'abort'     # Abort on panic
 default = []
 
 [dependencies]
-lightning = { version = "0.0.125", features = ["std"] }
-lightning-invoice = { version = "0.32.0" }
-lightning-net-tokio = { version = "0.0.125" }
-lightning-persister = { version = "0.0.125" }
-lightning-background-processor = { version = "0.0.125", features = ["futures"] }
-lightning-rapid-gossip-sync = { version = "0.0.125" }
-lightning-block-sync = { version = "0.0.125", features = ["rpc-client", "tokio"] }
-lightning-transaction-sync = { version = "0.0.125", features = ["esplora-async-https", "time"] }
-lightning-liquidity = { version = "0.1.0-alpha.6", features = ["std"] }
+lightning = { version = "0.1.0-beta1", features = ["std"] }
+lightning-invoice = { version = "0.33.0-beta1" }
+lightning-net-tokio = { version = "0.1.0-beta1" }
+lightning-persister = { version = "0.1.0-beta1" }
+lightning-background-processor = { version = "0.1.0-beta1", features = ["futures"] }
+lightning-rapid-gossip-sync = { version = "0.1.0-beta1" }
+lightning-block-sync = { version = "0.1.0-beta1", features = ["rpc-client", "tokio"] }
+lightning-transaction-sync = { version = "0.1.0-beta1", features = ["esplora-async-https", "time"] }
+lightning-liquidity = { version = "0.1.0-beta1", features = ["std"] }
 
 #lightning = { git = "https://github.com/lightningdevkit/rust-lightning", branch="main", features = ["std"] }
 #lightning-invoice = { git = "https://github.com/lightningdevkit/rust-lightning", branch="main" }
@@ -56,9 +56,9 @@ lightning-liquidity = { version = "0.1.0-alpha.6", features = ["std"] }
 #lightning-transaction-sync = { path = "../rust-lightning/lightning-transaction-sync", features = ["esplora-async"] }
 #lightning-liquidity = { path = "../lightning-liquidity", features = ["std"] }
 
-bdk_chain = { version = "=0.19.0", default-features = false, features = ["std"] }
-bdk_esplora = { version = "=0.18.0", default-features = false, features = ["async-https-rustls"]}
-bdk_wallet = { version = "=1.0.0-beta.4", default-features = false, features = ["std", "keys-bip39"]}
+bdk_chain = { version = "0.21.1", default-features = false, features = ["std"] }
+bdk_esplora = { version = "0.20.1", default-features = false, features = ["async-https-rustls", "tokio"]}
+bdk_wallet = { version = "1.0.0", default-features = false, features = ["std", "keys-bip39"]}
 
 reqwest = { version = "0.11", default-features = false, features = ["json", "rustls-tls"] }
 rusqlite = { version = "0.31.0", features = ["bundled"] }
@@ -70,7 +70,7 @@ base64 = { version = "0.22.1", default-features = false, features = ["std"] }
 rand = "0.8.5"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 tokio = { version = "1.37", default-features = false, features = [ "rt-multi-thread", "time", "sync", "macros" ] }
-esplora-client = { version = "0.9", default-features = false }
+esplora-client = { version = "0.11", default-features = false, features = ["tokio", "async-https-rustls"] }
 libc = "0.2"
 uniffi = { version = "0.27.3", features = ["build"], optional = true }
 serde = { version = "1.0.210", default-features = false, features = ["std", "derive"] }
@@ -83,7 +83,7 @@ prost = { version = "0.11.6", default-features = false}
 winapi = { version = "0.3", features = ["winbase"] }
 
 [dev-dependencies]
-lightning = { version = "0.0.125", features = ["std", "_test_utils"] }
+lightning = { version = "0.1.0-beta1", features = ["std", "_test_utils"] }
 #lightning = { git = "https://github.com/lightningdevkit/rust-lightning", branch="main", features = ["std", "_test_utils"] }
 electrum-client = { version = "0.21.0", default-features = true }
 bitcoincore-rpc = { version = "0.19.0", default-features = false }
