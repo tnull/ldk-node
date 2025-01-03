@@ -907,7 +907,7 @@ fn build_with_store_internal(
 	));
 
 	// Read ChannelMonitor state from store
-	let mut channel_monitors = match read_channel_monitors(
+	let channel_monitors = match read_channel_monitors(
 		Arc::clone(&kv_store),
 		Arc::clone(&keys_manager),
 		Arc::clone(&keys_manager),
@@ -948,7 +948,7 @@ fn build_with_store_internal(
 		) {
 			let mut reader = Cursor::new(res);
 			let channel_monitor_references =
-				channel_monitors.iter_mut().map(|(_, chanmon)| chanmon).collect();
+				channel_monitors.iter().map(|(_, chanmon)| chanmon).collect();
 			let read_args = ChannelManagerReadArgs::new(
 				Arc::clone(&keys_manager),
 				Arc::clone(&keys_manager),
