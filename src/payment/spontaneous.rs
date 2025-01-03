@@ -122,7 +122,7 @@ impl SpontaneousPayment {
 			None => RecipientOnionFields::spontaneous_empty(),
 		};
 
-		match self.channel_manager.send_spontaneous_payment_with_retry(
+		match self.channel_manager.send_spontaneous_payment(
 			Some(payment_preimage),
 			recipient_fields,
 			PaymentId(payment_hash.0),
