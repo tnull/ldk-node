@@ -16,11 +16,12 @@ use lightning::chain::chaininterface::BroadcasterInterface;
 use lightning::chain::{BestBlock, Listen};
 
 use lightning::events::bump_transaction::{Utxo, WalletSource};
+use lightning::ln::inbound_payment::ExpandedKey;
 use lightning::ln::msgs::{DecodeError, UnsignedGossipMessage};
 use lightning::ln::script::ShutdownScript;
 use lightning::sign::{
-	ChangeDestinationSource, EntropySource, InMemorySigner, KeyMaterial, KeysManager, NodeSigner,
-	OutputSpender, Recipient, SignerProvider, SpendableOutputDescriptor,
+	ChangeDestinationSource, EntropySource, InMemorySigner, KeysManager, NodeSigner, OutputSpender,
+	Recipient, SignerProvider, SpendableOutputDescriptor,
 };
 
 use lightning::util::message_signing;
@@ -715,8 +716,8 @@ where
 		self.inner.ecdh(recipient, other_key, tweak)
 	}
 
-	fn get_inbound_payment_key_material(&self) -> KeyMaterial {
-		self.inner.get_inbound_payment_key_material()
+	fn get_inbound_payment_key(&self) -> ExpandedKey {
+		self.inner.get_inbound_payment_key()
 	}
 
 	fn sign_invoice(
@@ -733,12 +734,6 @@ where
 		&self, invoice: &lightning::offers::invoice::UnsignedBolt12Invoice,
 	) -> Result<bitcoin::secp256k1::schnorr::Signature, ()> {
 		self.inner.sign_bolt12_invoice(invoice)
-	}
-
-	fn sign_bolt12_invoice_request(
-		&self, invoice_request: &lightning::offers::invoice_request::UnsignedInvoiceRequest,
-	) -> Result<bitcoin::secp256k1::schnorr::Signature, ()> {
-		self.inner.sign_bolt12_invoice_request(invoice_request)
 	}
 }
 
