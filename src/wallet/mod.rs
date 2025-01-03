@@ -28,7 +28,6 @@ use lightning::util::message_signing;
 use lightning_invoice::RawBolt11Invoice;
 
 use bdk_chain::spk_client::{FullScanRequest, SyncRequest};
-use bdk_chain::ChainPosition;
 use bdk_wallet::{Balance, KeychainKind, PersistedWallet, SignOptions, Update};
 
 use bitcoin::blockdata::constants::WITNESS_SCALE_FACTOR;
@@ -527,7 +526,7 @@ where
 		let mut utxos = Vec::new();
 		let confirmed_txs: Vec<Txid> = locked_wallet
 			.transactions()
-			.filter(|t| matches!(t.chain_position, ChainPosition::Confirmed(_)))
+			.filter(|t| t.chain_position.is_confirmed())
 			.map(|t| t.tx_node.txid)
 			.collect();
 		let unspent_confirmed_utxos =
