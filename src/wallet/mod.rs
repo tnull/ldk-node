@@ -139,11 +139,7 @@ where
 		let mut locked_wallet = self.inner.lock().unwrap();
 		let mut tx_builder = locked_wallet.build_tx();
 
-		tx_builder
-			.add_recipient(output_script, amount)
-			.fee_rate(fee_rate)
-			.nlocktime(locktime)
-			.enable_rbf();
+		tx_builder.add_recipient(output_script, amount).fee_rate(fee_rate).nlocktime(locktime);
 
 		let mut psbt = match tx_builder.finish() {
 			Ok(psbt) => {
@@ -255,10 +251,7 @@ where
 				OnchainSendAmount::ExactRetainingReserve { amount_sats, .. } => {
 					let mut tx_builder = locked_wallet.build_tx();
 					let amount = Amount::from_sat(amount_sats);
-					tx_builder
-						.add_recipient(address.script_pubkey(), amount)
-						.fee_rate(fee_rate)
-						.enable_rbf();
+					tx_builder.add_recipient(address.script_pubkey(), amount).fee_rate(fee_rate);
 					tx_builder
 				},
 				OnchainSendAmount::AllRetainingReserve { cur_anchor_reserve_sats } => {
@@ -277,8 +270,7 @@ where
 								change_address_info.address.script_pubkey(),
 								Amount::from_sat(cur_anchor_reserve_sats),
 							)
-							.fee_rate(fee_rate)
-							.enable_rbf();
+							.fee_rate(fee_rate);
 						match tmp_tx_builder.finish() {
 							Ok(psbt) => psbt.unsigned_tx,
 							Err(err) => {
@@ -316,17 +308,12 @@ where
 					let mut tx_builder = locked_wallet.build_tx();
 					tx_builder
 						.add_recipient(address.script_pubkey(), estimated_spendable_amount)
-						.fee_absolute(estimated_tx_fee)
-						.enable_rbf();
+						.fee_absolute(estimated_tx_fee);
 					tx_builder
 				},
 				OnchainSendAmount::AllDrainingReserve => {
 					let mut tx_builder = locked_wallet.build_tx();
-					tx_builder
-						.drain_wallet()
-						.drain_to(address.script_pubkey())
-						.fee_rate(fee_rate)
-						.enable_rbf();
+					tx_builder.drain_wallet().drain_to(address.script_pubkey()).fee_rate(fee_rate);
 					tx_builder
 				},
 			};
