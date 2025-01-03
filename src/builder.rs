@@ -1059,7 +1059,8 @@ fn build_with_store_internal(
 	let liquidity_source = liquidity_source_config.as_ref().and_then(|lsc| {
 		lsc.lsps2_service.as_ref().map(|(address, node_id, token)| {
 			let lsps2_client_config = Some(LSPS2ClientConfig {});
-			let liquidity_client_config = Some(LiquidityClientConfig { lsps2_client_config });
+			let liquidity_client_config =
+				Some(LiquidityClientConfig { lsps1_client_config: None, lsps2_client_config });
 			let liquidity_manager = Arc::new(LiquidityManager::new(
 				Arc::clone(&keys_manager),
 				Arc::clone(&channel_manager),
