@@ -936,6 +936,9 @@ fn build_with_store_internal(
 			100;
 	}
 
+	let message_router =
+		Arc::new(MessageRouter::new(Arc::clone(&network_graph), Arc::clone(&keys_manager)));
+
 	// Initialize the ChannelManager
 	let channel_manager = {
 		if let Ok(res) = kv_store.read(
@@ -954,6 +957,7 @@ fn build_with_store_internal(
 				Arc::clone(&chain_monitor),
 				Arc::clone(&tx_broadcaster),
 				Arc::clone(&router),
+				Arc::clone(&message_router),
 				Arc::clone(&logger),
 				user_config,
 				channel_monitor_references,
@@ -978,6 +982,7 @@ fn build_with_store_internal(
 				Arc::clone(&chain_monitor),
 				Arc::clone(&tx_broadcaster),
 				Arc::clone(&router),
+				Arc::clone(&message_router),
 				Arc::clone(&logger),
 				Arc::clone(&keys_manager),
 				Arc::clone(&keys_manager),
@@ -1000,16 +1005,15 @@ fn build_with_store_internal(
 		})?;
 	}
 
-	let message_router = MessageRouter::new(Arc::clone(&network_graph), Arc::clone(&keys_manager));
-
 	// Initialize the PeerManager
 	let onion_messenger: Arc<OnionMessenger> = Arc::new(OnionMessenger::new(
 		Arc::clone(&keys_manager),
 		Arc::clone(&keys_manager),
 		Arc::clone(&logger),
 		Arc::clone(&channel_manager),
-		Arc::new(message_router),
+		message_router,
 		Arc::clone(&channel_manager),
+		IgnoringMessageHandler {},
 		IgnoringMessageHandler {},
 		IgnoringMessageHandler {},
 	));
