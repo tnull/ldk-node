@@ -7,10 +7,11 @@
 
 use crate::liquidity::LiquiditySource;
 
-use lightning::ln::features::{InitFeatures, NodeFeatures};
 use lightning::ln::peer_handler::CustomMessageHandler;
 use lightning::ln::wire::CustomMessageReader;
 use lightning::util::logger::Logger;
+
+use lightning_types::features::{InitFeatures, NodeFeatures};
 
 use lightning_liquidity::lsps0::ser::RawLSPSMessage;
 

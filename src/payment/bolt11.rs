@@ -22,15 +22,16 @@ use crate::payment::SendingParameters;
 use crate::peer_store::{PeerInfo, PeerStore};
 use crate::types::{ChannelManager, KeysManager};
 
+use lightning::ln::bolt11_payment;
 use lightning::ln::channelmanager::{PaymentId, RecipientOnionFields, Retry, RetryableSendFailure};
 use lightning::ln::invoice_utils::{
 	create_invoice_from_channelmanager_and_duration_since_epoch,
 	create_invoice_from_channelmanager_and_duration_since_epoch_with_payment_hash,
 };
-use lightning::ln::{PaymentHash, PaymentPreimage};
 use lightning::routing::router::{PaymentParameters, RouteParameters};
 
-use lightning::ln::bolt11_payment;
+use lightning_types::payment::{PaymentHash, PaymentPreimage};
+
 use lightning_invoice::{Bolt11Invoice, Currency};
 
 use bitcoin::hashes::sha256::Hash as Sha256;

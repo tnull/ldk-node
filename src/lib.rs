@@ -100,6 +100,7 @@ pub use bip39;
 pub use bitcoin;
 pub use lightning;
 pub use lightning_invoice;
+pub use lightning_types;
 pub use vss_client;
 
 pub use balance::{BalanceDetails, LightningBalance, PendingSweepBalance};

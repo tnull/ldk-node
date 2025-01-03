@@ -32,10 +32,11 @@ use lightning::events::{Event as LdkEvent, PaymentFailureReason};
 use lightning::impl_writeable_tlv_based_enum;
 use lightning::ln::channelmanager::PaymentId;
 use lightning::ln::types::ChannelId;
-use lightning::ln::{PaymentHash, PaymentPreimage};
 use lightning::routing::gossip::NodeId;
 use lightning::util::errors::APIError;
 use lightning::util::ser::{Readable, ReadableArgs, Writeable, Writer};
+
+use lightning_types::payment::{PaymentHash, PaymentPreimage};
 
 use lightning_liquidity::lsps2::utils::compute_opening_fee;
 

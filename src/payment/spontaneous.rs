@@ -17,9 +17,10 @@ use crate::payment::SendingParameters;
 use crate::types::{ChannelManager, CustomTlvRecord, KeysManager};
 
 use lightning::ln::channelmanager::{PaymentId, RecipientOnionFields, Retry, RetryableSendFailure};
-use lightning::ln::{PaymentHash, PaymentPreimage};
 use lightning::routing::router::{PaymentParameters, RouteParameters};
 use lightning::sign::EntropySource;
+
+use lightning_types::payment::{PaymentHash, PaymentPreimage};
 
 use bitcoin::secp256k1::PublicKey;
 
