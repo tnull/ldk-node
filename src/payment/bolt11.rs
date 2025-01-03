@@ -20,25 +20,22 @@ use crate::payment::store::{
 };
 use crate::payment::SendingParameters;
 use crate::peer_store::{PeerInfo, PeerStore};
-use crate::types::{ChannelManager, KeysManager};
+use crate::types::ChannelManager;
 
 use lightning::ln::bolt11_payment;
-use lightning::ln::channelmanager::{PaymentId, RecipientOnionFields, Retry, RetryableSendFailure};
-use lightning::ln::invoice_utils::{
-	create_invoice_from_channelmanager_and_duration_since_epoch,
-	create_invoice_from_channelmanager_and_duration_since_epoch_with_payment_hash,
+use lightning::ln::channelmanager::{
+	Bolt11InvoiceParameters, PaymentId, RecipientOnionFields, Retry, RetryableSendFailure,
 };
 use lightning::routing::router::{PaymentParameters, RouteParameters};
 
 use lightning_types::payment::{PaymentHash, PaymentPreimage};
 
-use lightning_invoice::{Bolt11Invoice, Currency};
+use lightning_invoice::{Bolt11Invoice, Bolt11InvoiceDescription, Description};
 
 use bitcoin::hashes::sha256::Hash as Sha256;
 use bitcoin::hashes::Hash;
 
 use std::sync::{Arc, RwLock};
-use std::time::SystemTime;
 
 /// A payment handler allowing to create and pay [BOLT 11] invoices.
 ///
@@ -50,7 +47,6 @@ pub struct Bolt11Payment {
 	runtime: Arc<RwLock<Option<Arc<tokio::runtime::Runtime>>>>,
 	channel_manager: Arc<ChannelManager>,
 	connection_manager: Arc<ConnectionManager<Arc<FilesystemLogger>>>,
-	keys_manager: Arc<KeysManager>,
 	liquidity_source: Option<Arc<LiquiditySource<Arc<FilesystemLogger>>>>,
 	payment_store: Arc<PaymentStore<Arc<FilesystemLogger>>>,
 	peer_store: Arc<PeerStore<Arc<FilesystemLogger>>>,
@@ -63,7 +59,6 @@ impl Bolt11Payment {
 		runtime: Arc<RwLock<Option<Arc<tokio::runtime::Runtime>>>>,
 		channel_manager: Arc<ChannelManager>,
 		connection_manager: Arc<ConnectionManager<Arc<FilesystemLogger>>>,
-		keys_manager: Arc<KeysManager>,
 		liquidity_source: Option<Arc<LiquiditySource<Arc<FilesystemLogger>>>>,
 		payment_store: Arc<PaymentStore<Arc<FilesystemLogger>>>,
 		peer_store: Arc<PeerStore<Arc<FilesystemLogger>>>, config: Arc<Config>,
@@ -73,7 +68,6 @@ impl Bolt11Payment {
 			runtime,
 			channel_manager,
 			connection_manager,
-			keys_manager,
 			liquidity_source,
 			payment_store,
 			peer_store,
@@ -469,41 +463,18 @@ impl Bolt11Payment {
 		&self, amount_msat: Option<u64>, description: &str, expiry_secs: u32,
 		manual_claim_payment_hash: Option<PaymentHash>,
 	) -> Result<Bolt11Invoice, Error> {
-		let currency = Currency::from(self.config.network);
-		let keys_manager = Arc::clone(&self.keys_manager);
-		let duration = SystemTime::now()
-			.duration_since(SystemTime::UNIX_EPOCH)
-			.expect("for the foreseeable future this shouldn't happen");
+		let invoice_description = Bolt11InvoiceDescription::Direct(
+			Description::new(description.to_string()).map_err(|_| Error::InvoiceCreationFailed)?,
+		);
 
 		let invoice = {
-			let invoice_res = if let Some(payment_hash) = manual_claim_payment_hash {
-				create_invoice_from_channelmanager_and_duration_since_epoch_with_payment_hash(
-					&self.channel_manager,
-					keys_manager,
-					Arc::clone(&self.logger),
-					currency,
-					amount_msat,
-					description.to_string(),
-					duration,
-					expiry_secs,
-					payment_hash,
-					None,
-				)
-			} else {
-				create_invoice_from_channelmanager_and_duration_since_epoch(
-					&self.channel_manager,
-					keys_manager,
-					Arc::clone(&self.logger),
-					currency,
-					amount_msat,
-					description.to_string(),
-					duration,
-					expiry_secs,
-					None,
-				)
-			};
+			let mut invoice_params = Bolt11InvoiceParameters::default();
+			invoice_params.amount_msats = amount_msat;
+			invoice_params.description = invoice_description;
+			invoice_params.invoice_expiry_delta_secs = Some(expiry_secs);
+			invoice_params.payment_hash = manual_claim_payment_hash;
 
-			match invoice_res {
+			match self.channel_manager.create_bolt11_invoice(invoice_params) {
 				Ok(inv) => {
 					log_info!(self.logger, "Invoice created: {}", inv);
 					inv
@@ -749,7 +720,7 @@ impl Bolt11Payment {
 				Error::InvalidInvoice
 			})?
 		} else {
-			bolt11_payment::payment_parameters_from_zero_amount_invoice(&invoice, amount_msat).map_err(|_| {
+			bolt11_payment::payment_parameters_from_variable_amount_invoice(&invoice, amount_msat).map_err(|_| {
 				log_error!(self.logger, "Failed to send probes due to the given invoice unexpectedly being not \"zero-amount\".");
 				Error::InvalidInvoice
 			})?
