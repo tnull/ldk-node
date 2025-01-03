@@ -1037,7 +1037,7 @@ where
 				counterparty_node_id,
 				funding_satoshis,
 				channel_type,
-				push_msat: _,
+				channel_negotiation_type: _,
 				is_announced: _,
 				params: _,
 			} => {
