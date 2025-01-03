@@ -563,6 +563,7 @@ where
 				claim_deadline,
 				onion_fields,
 				counterparty_skimmed_fee_msat,
+				payment_id: _,
 			} => {
 				let payment_id = PaymentId(payment_hash.0);
 				if let Some(info) = self.payment_store.get(&payment_id) {
@@ -825,6 +826,7 @@ where
 				htlcs: _,
 				sender_intended_total_msat: _,
 				onion_fields,
+				payment_id: _,
 			} => {
 				let payment_id = PaymentId(payment_hash.0);
 				log_info!(
