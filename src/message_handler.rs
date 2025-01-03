@@ -63,7 +63,7 @@ where
 	L::Target: Logger,
 {
 	fn handle_custom_message(
-		&self, msg: Self::CustomMessage, sender_node_id: &PublicKey,
+		&self, msg: Self::CustomMessage, sender_node_id: PublicKey,
 	) -> Result<(), lightning::ln::msgs::LightningError> {
 		match self {
 			Self::Ignoring => Ok(()), // Should be unreachable!() as the reader will return `None`
@@ -91,7 +91,7 @@ where
 		}
 	}
 
-	fn provided_init_features(&self, their_node_id: &PublicKey) -> InitFeatures {
+	fn provided_init_features(&self, their_node_id: PublicKey) -> InitFeatures {
 		match self {
 			Self::Ignoring => InitFeatures::empty(),
 			Self::Liquidity { liquidity_source, .. } => {
@@ -101,7 +101,7 @@ where
 	}
 
 	fn peer_connected(
-		&self, their_node_id: &PublicKey, msg: &lightning::ln::msgs::Init, inbound: bool,
+		&self, their_node_id: PublicKey, msg: &lightning::ln::msgs::Init, inbound: bool,
 	) -> Result<(), ()> {
 		match self {
 			Self::Ignoring => Ok(()),
@@ -111,7 +111,7 @@ where
 		}
 	}
 
-	fn peer_disconnected(&self, their_node_id: &PublicKey) {
+	fn peer_disconnected(&self, their_node_id: PublicKey) {
 		match self {
 			Self::Ignoring => {},
 			Self::Liquidity { liquidity_source, .. } => {
