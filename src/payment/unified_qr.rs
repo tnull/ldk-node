@@ -265,8 +265,10 @@ impl<'a> bip21::de::DeserializationState<'a> for DeserializationState {
 			"lno" => {
 				let bolt12_value =
 					String::try_from(value).map_err(|_| Error::UriParameterParsingFailed)?;
-				let offer =
-					bolt12_value.parse::<Offer>().map_err(|_| Error::UriParameterParsingFailed)?;
+				let offer = bolt12_value
+					.to_lowercase()
+					.parse::<Offer>()
+					.map_err(|_| Error::UriParameterParsingFailed)?;
 				self.bolt12_offer = Some(offer);
 				Ok(bip21::de::ParamKind::Known)
 			},
@@ -342,7 +344,7 @@ mod tests {
 		}
 
 		if let Some(offer) = parsed_uri_with_offer.extras.bolt12_offer {
-			assert_eq!(offer, Offer::from_str(expected_bolt12_offer_2).unwrap());
+			assert_eq!(offer, Offer::from_str(&expected_bolt12_offer_2.to_lowercase()).unwrap());
 		} else {
 			panic!("No offer found.");
 		}

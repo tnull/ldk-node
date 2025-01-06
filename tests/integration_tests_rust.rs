@@ -849,7 +849,7 @@ fn unified_qr_send_receive() {
 	let expiry_sec = 4_000;
 
 	let uqr_payment = node_b.unified_qr_payment().receive(expected_amount_sats, "asdf", expiry_sec);
-	let uri_str = uqr_payment.clone().unwrap();
+	let uri_str = uqr_payment.clone().unwrap().to_lowercase();
 	let offer_payment_id: PaymentId = match node_a.unified_qr_payment().send(&uri_str) {
 		Ok(QrPaymentResult::Bolt12 { payment_id }) => {
 			println!("\nBolt12 payment sent successfully with PaymentID: {:?}", payment_id);
