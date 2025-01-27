@@ -55,6 +55,7 @@ use persist::KVStoreWalletPersister;
 
 use crate::config::{Config, ADDRESS_POOL_SIZE};
 use crate::data_store::StorableObject;
+use crate::event::EventQueue;
 use crate::fee_estimator::{ConfirmationTarget, FeeEstimator, OnchainFeeEstimator};
 use crate::logger::{log_debug, log_error, log_info, log_trace, LdkLogger, Logger};
 use crate::payment::pending_payment_store::PendingPaymentDetailsUpdate;
@@ -157,6 +158,7 @@ pub(crate) struct Wallet {
 	payment_store: Arc<PaymentStore>,
 	runtime: Arc<Runtime>,
 	config: Arc<Config>,
+	event_queue: Arc<EventQueue<Arc<Logger>>>,
 	logger: Arc<Logger>,
 	pending_payment_store: Arc<PendingPaymentStore>,
 	// Serializes the writers that must observe the payment record and its pending-store entry
@@ -179,7 +181,8 @@ impl Wallet {
 		persisted_internal_pool_indices: Vec<u32>, broadcaster: Arc<Broadcaster>,
 		fee_estimator: Arc<OnchainFeeEstimator>, chain_source: Arc<ChainSource>,
 		payment_store: Arc<PaymentStore>, runtime: Arc<Runtime>, config: Arc<Config>,
-		logger: Arc<Logger>, pending_payment_store: Arc<PendingPaymentStore>,
+		event_queue: Arc<EventQueue<Arc<Logger>>>, logger: Arc<Logger>,
+		pending_payment_store: Arc<PendingPaymentStore>,
 	) -> Self {
 		let address_pool = Mutex::new(AddressPool::new(
 			persisted_external_pool_indices,
@@ -208,6 +211,7 @@ impl Wallet {
 			payment_store,
 			runtime,
 			config,
+			event_queue,
 			logger,
 			pending_payment_store,
 			funding_payment_update_lock: tokio::sync::Mutex::new(()),
@@ -2801,6 +2805,7 @@ mod tests {
 
 		let (persisted_external_pool_indices, persisted_internal_pool_indices) =
 			persist::read_address_pool(&*store, &*logger).await.unwrap();
+		let event_queue = Arc::new(EventQueue::new(Arc::clone(&store), Arc::clone(&logger)));
 
 		Arc::new(Wallet::new(
 			bdk_wallet,
@@ -2813,6 +2818,7 @@ mod tests {
 			payment_store,
 			runtime,
 			config,
+			event_queue,
 			logger,
 			pending_payment_store,
 		))
