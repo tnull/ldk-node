@@ -546,6 +546,7 @@ impl Node {
 		let background_chan_man = Arc::clone(&self.channel_manager);
 		let background_gossip_sync = self.gossip_source.as_gossip_sync();
 		let background_peer_man = Arc::clone(&self.peer_manager);
+		let background_lm = self.liquidity_source.as_ref().map(|ls| ls.liquidity_manager());
 		let background_onion_messenger = Arc::clone(&self.onion_messenger);
 		let background_logger = Arc::clone(&self.logger);
 		let background_error_logger = Arc::clone(&self.logger);
@@ -582,6 +583,7 @@ impl Node {
 				Some(background_onion_messenger),
 				background_gossip_sync,
 				background_peer_man,
+				background_lm,
 				background_logger,
 				Some(background_scorer),
 				sleeper,

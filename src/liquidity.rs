@@ -72,13 +72,8 @@ where
 		Self { lsps2_service, channel_manager, keys_manager, liquidity_manager, config, logger }
 	}
 
-	pub(crate) fn set_peer_manager(&self, peer_manager: Arc<PeerManager>) {
-		let process_msgs_callback = move || peer_manager.process_events();
-		self.liquidity_manager.set_process_msgs_callback(process_msgs_callback);
-	}
-
-	pub(crate) fn liquidity_manager(&self) -> &LiquidityManager {
-		self.liquidity_manager.as_ref()
+	pub(crate) fn liquidity_manager(&self) -> Arc<LiquidityManager> {
+		Arc::clone(&self.liquidity_manager)
 	}
 
 	pub(crate) fn get_liquidity_source_details(&self) -> Option<(PublicKey, SocketAddress)> {
