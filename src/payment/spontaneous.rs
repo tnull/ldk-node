@@ -12,6 +12,7 @@ use crate::error::Error;
 use crate::logger::{log_error, log_info, LdkLogger, Logger};
 use crate::payment::store::{PaymentDetails, PaymentDirection, PaymentKind, PaymentStatus};
 use crate::payment::SendingParameters;
+use crate::runtime::Runtime;
 use crate::types::{ChannelManager, CustomTlvRecord, KeysManager, PaymentStore};
 
 use lightning::ln::channelmanager::{PaymentId, RecipientOnionFields, Retry, RetryableSendFailure};
@@ -22,7 +23,7 @@ use lightning_types::payment::{PaymentHash, PaymentPreimage};
 
 use bitcoin::secp256k1::PublicKey;
 
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 
 // The default `final_cltv_expiry_delta` we apply when not set.
 const LDK_DEFAULT_FINAL_CLTV_EXPIRY_DELTA: u32 = 144;
@@ -33,7 +34,7 @@ const LDK_DEFAULT_FINAL_CLTV_EXPIRY_DELTA: u32 = 144;
 ///
 /// [`Node::spontaneous_payment`]: crate::Node::spontaneous_payment
 pub struct SpontaneousPayment {
-	runtime: Arc<RwLock<Option<Arc<tokio::runtime::Runtime>>>>,
+	runtime: Arc<Runtime>,
 	channel_manager: Arc<ChannelManager>,
 	keys_manager: Arc<KeysManager>,
 	payment_store: Arc<PaymentStore>,
@@ -43,9 +44,9 @@ pub struct SpontaneousPayment {
 
 impl SpontaneousPayment {
 	pub(crate) fn new(
-		runtime: Arc<RwLock<Option<Arc<tokio::runtime::Runtime>>>>,
-		channel_manager: Arc<ChannelManager>, keys_manager: Arc<KeysManager>,
-		payment_store: Arc<PaymentStore>, config: Arc<Config>, logger: Arc<Logger>,
+		runtime: Arc<Runtime>, channel_manager: Arc<ChannelManager>,
+		keys_manager: Arc<KeysManager>, payment_store: Arc<PaymentStore>, config: Arc<Config>,
+		logger: Arc<Logger>,
 	) -> Self {
 		Self { runtime, channel_manager, keys_manager, payment_store, config, logger }
 	}
@@ -72,8 +73,7 @@ impl SpontaneousPayment {
 		&self, amount_msat: u64, node_id: PublicKey, sending_parameters: Option<SendingParameters>,
 		custom_tlvs: Option<Vec<CustomTlvRecord>>,
 	) -> Result<PaymentId, Error> {
-		let rt_lock = self.runtime.read().unwrap();
-		if rt_lock.is_none() {
+		if !self.runtime.is_running() {
 			return Err(Error::NotRunning);
 		}
 
@@ -180,8 +180,7 @@ impl SpontaneousPayment {
 	///
 	/// [`Bolt11Payment::send_probes`]: crate::payment::Bolt11Payment
 	pub fn send_probes(&self, amount_msat: u64, node_id: PublicKey) -> Result<(), Error> {
-		let rt_lock = self.runtime.read().unwrap();
-		if rt_lock.is_none() {
+		if !self.runtime.is_running() {
 			return Err(Error::NotRunning);
 		}
 

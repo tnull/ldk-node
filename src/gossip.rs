@@ -8,6 +8,7 @@
 use crate::chain::ChainSource;
 use crate::config::RGS_SYNC_TIMEOUT_SECS;
 use crate::logger::{log_error, log_trace, LdkLogger, Logger};
+use crate::runtime::{Runtime, RuntimeError};
 use crate::types::{GossipSync, Graph, P2PGossipSync, PeerManager, RapidGossipSync, UtxoLookup};
 use crate::Error;
 
@@ -15,7 +16,7 @@ use lightning_block_sync::gossip::{FutureSpawner, GossipVerifier};
 
 use std::future::Future;
 use std::sync::atomic::{AtomicU32, Ordering};
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 use std::time::Duration;
 
 pub(crate) enum GossipSource {
@@ -63,7 +64,7 @@ impl GossipSource {
 
 	pub(crate) fn set_gossip_verifier(
 		&self, chain_source: Arc<ChainSource>, peer_manager: Arc<PeerManager>,
-		runtime: Arc<RwLock<Option<Arc<tokio::runtime::Runtime>>>>,
+		runtime: Arc<Runtime>,
 	) {
 		match self {
 			Self::P2PNetwork { gossip_sync, logger } => {
@@ -133,28 +134,21 @@ impl GossipSource {
 }
 
 pub(crate) struct RuntimeSpawner {
-	runtime: Arc<RwLock<Option<Arc<tokio::runtime::Runtime>>>>,
+	runtime: Arc<Runtime>,
 	logger: Arc<Logger>,
 }
 
 impl RuntimeSpawner {
-	pub(crate) fn new(
-		runtime: Arc<RwLock<Option<Arc<tokio::runtime::Runtime>>>>, logger: Arc<Logger>,
-	) -> Self {
+	pub(crate) fn new(runtime: Arc<Runtime>, logger: Arc<Logger>) -> Self {
 		Self { runtime, logger }
 	}
 }
 
 impl FutureSpawner for RuntimeSpawner {
 	fn spawn<T: Future<Output = ()> + Send + 'static>(&self, future: T) {
-		let rt_lock = self.runtime.read().unwrap();
-		if rt_lock.is_none() {
+		if let Err(RuntimeError::NotRunning) = self.runtime.spawn(future) {
 			log_error!(self.logger, "Tried spawing a future while the runtime wasn't available. This should never happen.");
 			debug_assert!(false, "Tried spawing a future while the runtime wasn't available. This should never happen.");
-			return;
 		}
-
-		let runtime = rt_lock.as_ref().unwrap();
-		runtime.spawn(future);
 	}
 }

@@ -24,6 +24,7 @@ use crate::fee_estimator::{
 };
 use crate::io::utils::write_node_metrics;
 use crate::logger::{log_bytes, log_error, log_info, log_trace, LdkLogger, Logger};
+use crate::runtime::Runtime;
 use crate::types::{Broadcaster, ChainMonitor, ChannelManager, DynStore, Sweeper, Wallet};
 use crate::{Error, NodeMetrics};
 
@@ -126,7 +127,7 @@ impl ElectrumRuntimeStatus {
 	}
 
 	pub(crate) fn start(
-		&mut self, server_url: String, runtime: Arc<tokio::runtime::Runtime>, config: Arc<Config>,
+		&mut self, server_url: String, runtime: Arc<Runtime>, config: Arc<Config>,
 		logger: Arc<Logger>,
 	) -> Result<(), Error> {
 		match self {
@@ -311,7 +312,7 @@ impl ChainSource {
 		}
 	}
 
-	pub(crate) fn start(&self, runtime: Arc<tokio::runtime::Runtime>) -> Result<(), Error> {
+	pub(crate) fn start(&self, runtime: Arc<Runtime>) -> Result<(), Error> {
 		match self {
 			Self::Electrum { server_url, electrum_runtime_status, config, logger, .. } => {
 				electrum_runtime_status.write().unwrap().start(

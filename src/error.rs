@@ -5,6 +5,8 @@
 // http://opensource.org/licenses/MIT>, at your option. You may not use this file except in
 // accordance with one or both of these licenses.
 
+use crate::runtime::RuntimeError;
+
 use bdk_chain::bitcoin::psbt::ExtractTxError as BdkExtractTxError;
 use bdk_chain::local_chain::CannotConnectError as BdkChainConnectionError;
 use bdk_chain::tx_graph::CalculateFeeError as BdkChainCalculateFeeError;
@@ -20,6 +22,8 @@ pub enum Error {
 	AlreadyRunning,
 	/// Returned when trying to stop [`crate::Node`] while it is not running.
 	NotRunning,
+	/// An attempt to setup a runtime has failed.
+	RuntimeSetupFailed,
 	/// An on-chain transaction could not be created.
 	OnchainTxCreationFailed,
 	/// A network connection has been closed.
@@ -127,6 +131,7 @@ impl fmt::Display for Error {
 		match *self {
 			Self::AlreadyRunning => write!(f, "Node is already running."),
 			Self::NotRunning => write!(f, "Node is not running."),
+			Self::RuntimeSetupFailed => write!(f, "Failed to setup a runtime."),
 			Self::OnchainTxCreationFailed => {
 				write!(f, "On-chain transaction could not be created.")
 			},
@@ -198,6 +203,16 @@ impl fmt::Display for Error {
 }
 
 impl std::error::Error for Error {}
+
+impl From<RuntimeError> for Error {
+	fn from(runtime_error: RuntimeError) -> Self {
+		match runtime_error {
+			RuntimeError::SetupFailed => Self::RuntimeSetupFailed,
+			RuntimeError::AlreadyRunning => Self::AlreadyRunning,
+			RuntimeError::NotRunning => Self::NotRunning,
+		}
+	}
+}
 
 impl From<BdkSignerError> for Error {
 	fn from(_: BdkSignerError) -> Self {

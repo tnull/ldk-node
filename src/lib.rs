@@ -93,6 +93,7 @@ pub mod logger;
 mod message_handler;
 pub mod payment;
 mod peer_store;
+mod runtime;
 mod sweep;
 mod tx_broadcaster;
 mod types;
@@ -141,6 +142,7 @@ use payment::{
 	UnifiedQrPayment,
 };
 use peer_store::{PeerInfo, PeerStore};
+use runtime::Runtime;
 use types::{
 	Broadcaster, BumpTransactionEventHandler, ChainMonitor, ChannelManager, DynStore, Graph,
 	KeysManager, OnionMessenger, PaymentStore, PeerManager, Router, Scorer, Sweeper, Wallet,
@@ -176,7 +178,7 @@ uniffi::include_scaffolding!("ldk_node");
 ///
 /// Needs to be initialized and instantiated through [`Builder::build`].
 pub struct Node {
-	runtime: Arc<RwLock<Option<Arc<tokio::runtime::Runtime>>>>,
+	runtime: Arc<Runtime>,
 	stop_sender: tokio::sync::watch::Sender<()>,
 	event_handling_stopped_sender: tokio::sync::watch::Sender<()>,
 	config: Arc<Config>,
@@ -208,30 +210,32 @@ impl Node {
 	/// Starts the necessary background tasks, such as handling events coming from user input,
 	/// LDK/BDK, and the peer-to-peer network.
 	///
+	/// This will try to auto-detect an outer pre-existing runtime, e.g., to avoid stacking Tokio
+	/// runtime contexts. Note we require the outer runtime to be of the `multithreaded` flavor.
+	///
 	/// After this returns, the [`Node`] instance can be controlled via the provided API methods in
 	/// a thread-safe manner.
 	pub fn start(&self) -> Result<(), Error> {
-		let runtime =
-			Arc::new(tokio::runtime::Builder::new_multi_thread().enable_all().build().unwrap());
-		self.start_with_runtime(runtime)
+		self.runtime.start()?;
+		self.start_inner()
 	}
 
 	/// Starts the necessary background tasks (such as handling events coming from user input,
 	/// LDK/BDK, and the peer-to-peer network) on the the given `runtime`.
 	///
-	/// This allows to have LDK Node reuse an outer pre-existing runtime, e.g., to avoid stacking Tokio
-	/// runtime contexts.
+	/// This allows to have LDK Node to specify an outer pre-existing runtime, e.g., to avoid
+	/// stacking Tokio runtime contexts. Note we require the runtime to be of the `multithreaded`
+	/// flavor.
 	///
 	/// After this returns, the [`Node`] instance can be controlled via the provided API methods in
 	/// a thread-safe manner.
-	pub fn start_with_runtime(&self, runtime: Arc<tokio::runtime::Runtime>) -> Result<(), Error> {
-		// Acquire a run lock and hold it until we're setup.
-		let mut runtime_lock = self.runtime.write().unwrap();
-		if runtime_lock.is_some() {
-			// We're already running.
-			return Err(Error::AlreadyRunning);
-		}
+	pub fn start_with_runtime(&self, handle: tokio::runtime::Handle) -> Result<(), Error> {
+		self.runtime.start_from_handle(handle)?;
+		self.start_inner()
+	}
 
+	fn start_inner(&self) -> Result<(), Error> {
+		// Acquire a run lock and hold it until we're setup.
 		log_info!(
 			self.logger,
 			"Starting up LDK Node with node ID {} on network: {}",
@@ -240,17 +244,14 @@ impl Node {
 		);
 
 		// Start up any runtime-dependant chain sources (e.g. Electrum)
-		self.chain_source.start(Arc::clone(&runtime)).map_err(|e| {
+		self.chain_source.start(Arc::clone(&self.runtime)).map_err(|e| {
 			log_error!(self.logger, "Failed to start chain syncing: {}", e);
 			e
 		})?;
 
 		// Block to ensure we update our fee rate cache once on startup
 		let chain_source = Arc::clone(&self.chain_source);
-		let runtime_ref = &runtime;
-		tokio::task::block_in_place(move || {
-			runtime_ref.block_on(async move { chain_source.update_fee_rate_estimates().await })
-		})?;
+		self.runtime.block_on(async move { chain_source.update_fee_rate_estimates().await })??;
 
 		// Spawn background task continuously syncing onchain, lightning, and fee rate cache.
 		let stop_sync_receiver = self.stop_sender.subscribe();
@@ -258,11 +259,11 @@ impl Node {
 		let sync_cman = Arc::clone(&self.channel_manager);
 		let sync_cmon = Arc::clone(&self.chain_monitor);
 		let sync_sweeper = Arc::clone(&self.output_sweeper);
-		runtime.spawn(async move {
+		self.runtime.spawn(async move {
 			chain_source
 				.continuously_sync_wallets(stop_sync_receiver, sync_cman, sync_cmon, sync_sweeper)
 				.await;
-		});
+		})?;
 
 		if self.gossip_source.is_rgs() {
 			let gossip_source = Arc::clone(&self.gossip_source);
@@ -270,7 +271,7 @@ impl Node {
 			let gossip_sync_logger = Arc::clone(&self.logger);
 			let gossip_node_metrics = Arc::clone(&self.node_metrics);
 			let mut stop_gossip_sync = self.stop_sender.subscribe();
-			runtime.spawn(async move {
+			self.runtime.spawn(async move {
 				let mut interval = tokio::time::interval(RGS_SYNC_INTERVAL);
 				loop {
 					tokio::select! {
@@ -311,7 +312,7 @@ impl Node {
 						}
 					}
 				}
-			});
+			})?;
 		}
 
 		if let Some(listening_addresses) = &self.config.listening_addresses {
@@ -337,7 +338,7 @@ impl Node {
 				bind_addrs.extend(resolved_address);
 			}
 
-			runtime.spawn(async move {
+			self.runtime.spawn(async move {
 				{
 				let listener =
 					tokio::net::TcpListener::bind(&*bind_addrs).await
@@ -375,7 +376,7 @@ impl Node {
 				}
 
 				listening_indicator.store(false, Ordering::Release);
-			});
+			})?;
 		}
 
 		// Regularly reconnect to persisted peers.
@@ -384,7 +385,7 @@ impl Node {
 		let connect_logger = Arc::clone(&self.logger);
 		let connect_peer_store = Arc::clone(&self.peer_store);
 		let mut stop_connect = self.stop_sender.subscribe();
-		runtime.spawn(async move {
+		self.runtime.spawn(async move {
 			let mut interval = tokio::time::interval(PEER_RECONNECTION_INTERVAL);
 			interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 			loop {
@@ -412,7 +413,7 @@ impl Node {
 						}
 				}
 			}
-		});
+		})?;
 
 		// Regularly broadcast node announcements.
 		let bcast_cm = Arc::clone(&self.channel_manager);
@@ -424,7 +425,7 @@ impl Node {
 		let mut stop_bcast = self.stop_sender.subscribe();
 		let node_alias = self.config.node_alias.clone();
 		if may_announce_channel(&self.config).is_ok() {
-			runtime.spawn(async move {
+			self.runtime.spawn(async move {
 				// We check every 30 secs whether our last broadcast is NODE_ANN_BCAST_INTERVAL away.
 				#[cfg(not(test))]
 				let mut interval = tokio::time::interval(Duration::from_secs(30));
@@ -495,13 +496,13 @@ impl Node {
 						}
 					}
 				}
-			});
+			})?;
 		}
 
 		let mut stop_tx_bcast = self.stop_sender.subscribe();
 		let chain_source = Arc::clone(&self.chain_source);
 		let tx_bcast_logger = Arc::clone(&self.logger);
-		runtime.spawn(async move {
+		self.runtime.spawn(async move {
 			// Every second we try to clear our broadcasting queue.
 			let mut interval = tokio::time::interval(Duration::from_secs(1));
 			interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -519,7 +520,7 @@ impl Node {
 						}
 				}
 			}
-		});
+		})?;
 
 		let bump_tx_event_handler = Arc::new(BumpTransactionEventHandler::new(
 			Arc::clone(&self.tx_broadcaster),
@@ -578,7 +579,7 @@ impl Node {
 
 		let background_stop_logger = Arc::clone(&self.logger);
 		let event_handling_stopped_sender = self.event_handling_stopped_sender.clone();
-		runtime.spawn(async move {
+		self.runtime.spawn(async move {
 			process_events_async(
 				background_persister,
 				|e| background_event_handler.handle_event(e),
@@ -611,13 +612,13 @@ impl Node {
 					debug_assert!(false);
 				},
 			}
-		});
+		})?;
 
 		if let Some(liquidity_source) = self.liquidity_source.as_ref() {
 			let mut stop_liquidity_handler = self.stop_sender.subscribe();
 			let liquidity_handler = Arc::clone(&liquidity_source);
 			let liquidity_logger = Arc::clone(&self.logger);
-			runtime.spawn(async move {
+			self.runtime.spawn(async move {
 				loop {
 					tokio::select! {
 						_ = stop_liquidity_handler.changed() => {
@@ -630,10 +631,8 @@ impl Node {
 						_ = liquidity_handler.handle_next_event() => {}
 					}
 				}
-			});
+			})?;
 		}
-
-		*runtime_lock = Some(runtime);
 
 		log_info!(self.logger, "Startup complete.");
 		Ok(())
@@ -643,9 +642,9 @@ impl Node {
 	///
 	/// After this returns most API methods will return [`Error::NotRunning`].
 	pub fn stop(&self) -> Result<(), Error> {
-		let runtime = self.runtime.write().unwrap().take().ok_or(Error::NotRunning)?;
-		#[cfg(tokio_unstable)]
-		let metrics_runtime = Arc::clone(&runtime);
+		if !self.runtime.is_running() {
+			return Err(Error::NotRunning);
+		}
 
 		log_info!(self.logger, "Shutting down LDK Node with node ID {}...", self.node_id());
 
@@ -675,15 +674,13 @@ impl Node {
 		// FIXME: For now, we wait up to 100 secs (BDK_WALLET_SYNC_TIMEOUT_SECS + 10) to allow
 		// event handling to exit gracefully even if it was blocked on the BDK wallet syncing. We
 		// should drop this considerably post upgrading to BDK 1.0.
-		let timeout_res = tokio::task::block_in_place(move || {
-			runtime.block_on(async {
-				tokio::time::timeout(
-					Duration::from_secs(100),
-					event_handling_stopped_receiver.changed(),
-				)
-				.await
-			})
-		});
+		let timeout_res = self.runtime.block_on(async {
+			tokio::time::timeout(
+				Duration::from_secs(100),
+				event_handling_stopped_receiver.changed(),
+			)
+			.await
+		})?;
 
 		match timeout_res {
 			Ok(stop_res) => match stop_res {
@@ -706,14 +703,7 @@ impl Node {
 			},
 		}
 
-		#[cfg(tokio_unstable)]
-		{
-			log_trace!(
-				self.logger,
-				"Active runtime tasks left prior to shutdown: {}",
-				metrics_runtime.metrics().active_tasks_count()
-			);
-		}
+		self.runtime.stop()?;
 
 		log_info!(self.logger, "Shutdown complete.");
 		Ok(())
@@ -721,7 +711,7 @@ impl Node {
 
 	/// Returns the status of the [`Node`].
 	pub fn status(&self) -> NodeStatus {
-		let is_running = self.runtime.read().unwrap().is_some();
+		let is_running = self.runtime.is_running();
 		let is_listening = self.is_listening.load(Ordering::Acquire);
 		let current_best_block = self.channel_manager.current_best_block().into();
 		let locked_node_metrics = self.node_metrics.read().unwrap();
@@ -1012,11 +1002,9 @@ impl Node {
 	pub fn connect(
 		&self, node_id: PublicKey, address: SocketAddress, persist: bool,
 	) -> Result<(), Error> {
-		let rt_lock = self.runtime.read().unwrap();
-		if rt_lock.is_none() {
+		if !self.runtime.is_running() {
 			return Err(Error::NotRunning);
 		}
-		let runtime = rt_lock.as_ref().unwrap();
 
 		let peer_info = PeerInfo { node_id, address };
 
@@ -1026,11 +1014,9 @@ impl Node {
 
 		// We need to use our main runtime here as a local runtime might not be around to poll
 		// connection futures going forward.
-		tokio::task::block_in_place(move || {
-			runtime.block_on(async move {
-				con_cm.connect_peer_if_necessary(con_node_id, con_addr).await
-			})
-		})?;
+		self.runtime.block_on(async move {
+			con_cm.connect_peer_if_necessary(con_node_id, con_addr).await
+		})??;
 
 		log_info!(self.logger, "Connected to peer {}@{}. ", peer_info.node_id, peer_info.address);
 
@@ -1046,8 +1032,7 @@ impl Node {
 	/// Will also remove the peer from the peer store, i.e., after this has been called we won't
 	/// try to reconnect on restart.
 	pub fn disconnect(&self, counterparty_node_id: PublicKey) -> Result<(), Error> {
-		let rt_lock = self.runtime.read().unwrap();
-		if rt_lock.is_none() {
+		if !self.runtime.is_running() {
 			return Err(Error::NotRunning);
 		}
 
@@ -1069,11 +1054,9 @@ impl Node {
 		push_to_counterparty_msat: Option<u64>, channel_config: Option<ChannelConfig>,
 		announce_for_forwarding: bool,
 	) -> Result<UserChannelId, Error> {
-		let rt_lock = self.runtime.read().unwrap();
-		if rt_lock.is_none() {
+		if !self.runtime.is_running() {
 			return Err(Error::NotRunning);
 		}
-		let runtime = rt_lock.as_ref().unwrap();
 
 		let peer_info = PeerInfo { node_id, address };
 
@@ -1097,11 +1080,9 @@ impl Node {
 
 		// We need to use our main runtime here as a local runtime might not be around to poll
 		// connection futures going forward.
-		tokio::task::block_in_place(move || {
-			runtime.block_on(async move {
-				con_cm.connect_peer_if_necessary(con_node_id, con_addr).await
-			})
-		})?;
+		self.runtime.block_on(async move {
+			con_cm.connect_peer_if_necessary(con_node_id, con_addr).await
+		})??;
 
 		// Fail if we have less than the channel value + anchor reserve available (if applicable).
 		let init_features = self
@@ -1249,8 +1230,7 @@ impl Node {
 	///
 	/// [`EsploraSyncConfig::background_sync_config`]: crate::config::EsploraSyncConfig::background_sync_config
 	pub fn sync_wallets(&self) -> Result<(), Error> {
-		let rt_lock = self.runtime.read().unwrap();
-		if rt_lock.is_none() {
+		if !self.runtime.is_running() {
 			return Err(Error::NotRunning);
 		}
 
@@ -1258,35 +1238,27 @@ impl Node {
 		let sync_cman = Arc::clone(&self.channel_manager);
 		let sync_cmon = Arc::clone(&self.chain_monitor);
 		let sync_sweeper = Arc::clone(&self.output_sweeper);
-		tokio::task::block_in_place(move || {
-			tokio::runtime::Builder::new_multi_thread().enable_all().build().unwrap().block_on(
-				async move {
-					match chain_source.as_ref() {
-						ChainSource::Esplora { .. } => {
-							chain_source.update_fee_rate_estimates().await?;
-							chain_source
-								.sync_lightning_wallet(sync_cman, sync_cmon, sync_sweeper)
-								.await?;
-							chain_source.sync_onchain_wallet().await?;
-						},
-						ChainSource::Electrum { .. } => {
-							chain_source.update_fee_rate_estimates().await?;
-							chain_source
-								.sync_lightning_wallet(sync_cman, sync_cmon, sync_sweeper)
-								.await?;
-							chain_source.sync_onchain_wallet().await?;
-						},
-						ChainSource::BitcoindRpc { .. } => {
-							chain_source.update_fee_rate_estimates().await?;
-							chain_source
-								.poll_and_update_listeners(sync_cman, sync_cmon, sync_sweeper)
-								.await?;
-						},
-					}
-					Ok(())
+		self.runtime.block_on(async move {
+			match chain_source.as_ref() {
+				ChainSource::Esplora { .. } => {
+					chain_source.update_fee_rate_estimates().await?;
+					chain_source.sync_lightning_wallet(sync_cman, sync_cmon, sync_sweeper).await?;
+					chain_source.sync_onchain_wallet().await?;
 				},
-			)
-		})
+				ChainSource::Electrum { .. } => {
+					chain_source.update_fee_rate_estimates().await?;
+					chain_source.sync_lightning_wallet(sync_cman, sync_cmon, sync_sweeper).await?;
+					chain_source.sync_onchain_wallet().await?;
+				},
+				ChainSource::BitcoindRpc { .. } => {
+					chain_source.update_fee_rate_estimates().await?;
+					chain_source
+						.poll_and_update_listeners(sync_cman, sync_cmon, sync_sweeper)
+						.await?;
+				},
+			}
+			Ok(())
+		})?
 	}
 
 	/// Close a previously opened channel.

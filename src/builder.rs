@@ -27,6 +27,7 @@ use crate::liquidity::{
 use crate::logger::{log_error, log_info, LdkLogger, LogLevel, LogWriter, Logger};
 use crate::message_handler::NodeCustomMessageHandler;
 use crate::peer_store::PeerStore;
+use crate::runtime::Runtime;
 use crate::tx_broadcaster::TransactionBroadcaster;
 use crate::types::{
 	ChainMonitor, ChannelManager, DynStore, GossipSync, Graph, KeysManager, MessageRouter,
@@ -1101,7 +1102,7 @@ fn build_with_store_internal(
 		},
 	};
 
-	let runtime = Arc::new(RwLock::new(None));
+	let runtime = Arc::new(Runtime::new(Arc::clone(&logger)));
 
 	// Initialize the ChainMonitor
 	let chain_monitor: Arc<ChainMonitor> = Arc::new(chainmonitor::ChainMonitor::new(

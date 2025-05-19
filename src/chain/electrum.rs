@@ -15,6 +15,7 @@ use crate::fee_estimator::{
 	ConfirmationTarget,
 };
 use crate::logger::{log_bytes, log_error, log_info, log_trace, LdkLogger, Logger};
+use crate::runtime::Runtime;
 
 use lightning::chain::{Confirm, Filter, WatchedOutput};
 use lightning::util::ser::Writeable;
@@ -46,15 +47,14 @@ pub(crate) struct ElectrumRuntimeClient {
 	electrum_client: Arc<ElectrumClient>,
 	bdk_electrum_client: Arc<BdkElectrumClient<ElectrumClient>>,
 	tx_sync: Arc<ElectrumSyncClient<Arc<Logger>>>,
-	runtime: Arc<tokio::runtime::Runtime>,
+	runtime: Arc<Runtime>,
 	config: Arc<Config>,
 	logger: Arc<Logger>,
 }
 
 impl ElectrumRuntimeClient {
 	pub(crate) fn new(
-		server_url: String, runtime: Arc<tokio::runtime::Runtime>, config: Arc<Config>,
-		logger: Arc<Logger>,
+		server_url: String, runtime: Arc<Runtime>, config: Arc<Config>, logger: Arc<Logger>,
 	) -> Result<Self, Error> {
 		let electrum_config = ElectrumConfigBuilder::new()
 			.retry(ELECTRUM_CLIENT_NUM_RETRIES)
@@ -88,7 +88,7 @@ impl ElectrumRuntimeClient {
 		let now = Instant::now();
 
 		let tx_sync = Arc::clone(&self.tx_sync);
-		let spawn_fut = self.runtime.spawn_blocking(move || tx_sync.sync(confirmables));
+		let spawn_fut = self.runtime.spawn_blocking(move || tx_sync.sync(confirmables))?;
 		let timeout_fut =
 			tokio::time::timeout(Duration::from_secs(LDK_WALLET_SYNC_TIMEOUT_SECS), spawn_fut);
 
@@ -130,7 +130,7 @@ impl ElectrumRuntimeClient {
 				BDK_ELECTRUM_CLIENT_BATCH_SIZE,
 				true,
 			)
-		});
+		})?;
 		let wallet_sync_timeout_fut =
 			tokio::time::timeout(Duration::from_secs(BDK_WALLET_SYNC_TIMEOUT_SECS), spawn_fut);
 
@@ -159,7 +159,7 @@ impl ElectrumRuntimeClient {
 
 		let spawn_fut = self.runtime.spawn_blocking(move || {
 			bdk_electrum_client.sync(request, BDK_ELECTRUM_CLIENT_BATCH_SIZE, true)
-		});
+		})?;
 		let wallet_sync_timeout_fut =
 			tokio::time::timeout(Duration::from_secs(BDK_WALLET_SYNC_TIMEOUT_SECS), spawn_fut);
 
@@ -185,8 +185,13 @@ impl ElectrumRuntimeClient {
 		let txid = tx.compute_txid();
 		let tx_bytes = tx.encode();
 
-		let spawn_fut =
-			self.runtime.spawn_blocking(move || electrum_client.transaction_broadcast(&tx));
+		let spawn_fut = if let Ok(spawn_fut) =
+			self.runtime.spawn_blocking(move || electrum_client.transaction_broadcast(&tx))
+		{
+			spawn_fut
+		} else {
+			return;
+		};
 
 		let timeout_fut =
 			tokio::time::timeout(Duration::from_secs(TX_BROADCAST_TIMEOUT_SECS), spawn_fut);
@@ -233,7 +238,7 @@ impl ElectrumRuntimeClient {
 			batch.estimate_fee(num_blocks);
 		}
 
-		let spawn_fut = self.runtime.spawn_blocking(move || electrum_client.batch_call(&batch));
+		let spawn_fut = self.runtime.spawn_blocking(move || electrum_client.batch_call(&batch))?;
 
 		let timeout_fut = tokio::time::timeout(
 			Duration::from_secs(FEE_RATE_CACHE_UPDATE_TIMEOUT_SECS),
