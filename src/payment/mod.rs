@@ -9,6 +9,7 @@
 
 mod bolt11;
 mod bolt12;
+pub(crate) mod metadata;
 mod onchain;
 mod spontaneous;
 pub(crate) mod store;
