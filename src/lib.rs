@@ -107,6 +107,7 @@ pub use lightning;
 pub use lightning_invoice;
 pub use lightning_liquidity;
 pub use lightning_types;
+pub use tokio;
 pub use vss_client;
 
 pub use balance::{BalanceDetails, LightningBalance, PendingSweepBalance};

@@ -259,6 +259,7 @@ impl NodeBuilder {
 	///
 	/// If not provided, the node will spawn its own runtime or reuse any outer runtime context it
 	/// can detect.
+	#[cfg_attr(feature = "uniffi", allow(dead_code))]
 	pub fn set_runtime(&mut self, runtime_handle: tokio::runtime::Handle) -> &mut Self {
 		self.runtime_handle = Some(runtime_handle);
 		self
