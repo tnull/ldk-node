@@ -1,4 +1,4 @@
-// This file is Copyright its original authors, visible in version control history.lib
+// This file is Copyright its original authors, visible in version control history.
 //
 // This file is licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
 // http://www.apache.org/licenses/LICENSE-2.0> or the MIT license <LICENSE-MIT or
