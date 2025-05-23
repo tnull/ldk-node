@@ -252,7 +252,6 @@ interface LSPS1Liquidity {
 enum NodeError {
 	"AlreadyRunning",
 	"NotRunning",
-	"RuntimeSetupFailed",
 	"OnchainTxCreationFailed",
 	"ConnectionFailed",
 	"InvoiceCreationFailed",
@@ -331,6 +330,7 @@ enum BuildError {
 	"InvalidListeningAddresses",
 	"InvalidAnnouncementAddresses",
 	"InvalidNodeAlias",
+	"RuntimeSetupFailed",
 	"ReadFailed",
 	"WriteFailed",
 	"StoragePathAccessFailed",

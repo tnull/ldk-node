@@ -38,7 +38,7 @@ use lightning_invoice::Bolt11InvoiceDescription as LdkBolt11InvoiceDescription;
 use bitcoin::hashes::sha256::Hash as Sha256;
 use bitcoin::hashes::Hash;
 
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 
 #[cfg(not(feature = "uniffi"))]
 type Bolt11Invoice = LdkBolt11Invoice;
@@ -95,6 +95,7 @@ pub struct Bolt11Payment {
 	payment_store: Arc<PaymentStore>,
 	peer_store: Arc<PeerStore<Arc<Logger>>>,
 	config: Arc<Config>,
+	is_running: Arc<RwLock<bool>>,
 	logger: Arc<Logger>,
 }
 
@@ -104,7 +105,7 @@ impl Bolt11Payment {
 		connection_manager: Arc<ConnectionManager<Arc<Logger>>>,
 		liquidity_source: Option<Arc<LiquiditySource<Arc<Logger>>>>,
 		payment_store: Arc<PaymentStore>, peer_store: Arc<PeerStore<Arc<Logger>>>,
-		config: Arc<Config>, logger: Arc<Logger>,
+		config: Arc<Config>, is_running: Arc<RwLock<bool>>, logger: Arc<Logger>,
 	) -> Self {
 		Self {
 			runtime,
@@ -114,6 +115,7 @@ impl Bolt11Payment {
 			payment_store,
 			peer_store,
 			config,
+			is_running,
 			logger,
 		}
 	}
@@ -126,7 +128,7 @@ impl Bolt11Payment {
 		&self, invoice: &Bolt11Invoice, sending_parameters: Option<SendingParameters>,
 	) -> Result<PaymentId, Error> {
 		let invoice = maybe_convert_invoice(invoice);
-		if !self.runtime.is_running() {
+		if !*self.is_running.read().unwrap() {
 			return Err(Error::NotRunning);
 		}
 
@@ -234,7 +236,7 @@ impl Bolt11Payment {
 		sending_parameters: Option<SendingParameters>,
 	) -> Result<PaymentId, Error> {
 		let invoice = maybe_convert_invoice(invoice);
-		if !self.runtime.is_running() {
+		if !*self.is_running.read().unwrap() {
 			return Err(Error::NotRunning);
 		}
 
@@ -657,7 +659,7 @@ impl Bolt11Payment {
 		// connection futures going forward.
 		self.runtime.block_on(async move {
 			con_cm.connect_peer_if_necessary(con_node_id, con_addr).await
-		})??;
+		})?;
 
 		log_info!(self.logger, "Connected to LSP {}@{}. ", peer_info.node_id, peer_info.address);
 
@@ -684,7 +686,7 @@ impl Bolt11Payment {
 						.await
 						.map(|(invoice, prop_fee)| (invoice, None, Some(prop_fee)))
 				}
-			})??;
+			})?;
 
 		// Register payment in payment store.
 		let payment_hash = PaymentHash(invoice.payment_hash().to_byte_array());
@@ -733,7 +735,7 @@ impl Bolt11Payment {
 	/// amount times [`Config::probing_liquidity_limit_multiplier`] won't be used to send
 	/// pre-flight probes.
 	pub fn send_probes(&self, invoice: &Bolt11Invoice) -> Result<(), Error> {
-		if !self.runtime.is_running() {
+		if !*self.is_running.read().unwrap() {
 			return Err(Error::NotRunning);
 		}
 
@@ -766,7 +768,7 @@ impl Bolt11Payment {
 	pub fn send_probes_using_amount(
 		&self, invoice: &Bolt11Invoice, amount_msat: u64,
 	) -> Result<(), Error> {
-		if !self.runtime.is_running() {
+		if !*self.is_running.read().unwrap() {
 			return Err(Error::NotRunning);
 		}
 

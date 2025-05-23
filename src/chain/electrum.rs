@@ -88,7 +88,7 @@ impl ElectrumRuntimeClient {
 		let now = Instant::now();
 
 		let tx_sync = Arc::clone(&self.tx_sync);
-		let spawn_fut = self.runtime.spawn_blocking(move || tx_sync.sync(confirmables))?;
+		let spawn_fut = self.runtime.spawn_blocking(move || tx_sync.sync(confirmables));
 		let timeout_fut =
 			tokio::time::timeout(Duration::from_secs(LDK_WALLET_SYNC_TIMEOUT_SECS), spawn_fut);
 
@@ -130,7 +130,7 @@ impl ElectrumRuntimeClient {
 				BDK_ELECTRUM_CLIENT_BATCH_SIZE,
 				true,
 			)
-		})?;
+		});
 		let wallet_sync_timeout_fut =
 			tokio::time::timeout(Duration::from_secs(BDK_WALLET_SYNC_TIMEOUT_SECS), spawn_fut);
 
@@ -159,7 +159,7 @@ impl ElectrumRuntimeClient {
 
 		let spawn_fut = self.runtime.spawn_blocking(move || {
 			bdk_electrum_client.sync(request, BDK_ELECTRUM_CLIENT_BATCH_SIZE, true)
-		})?;
+		});
 		let wallet_sync_timeout_fut =
 			tokio::time::timeout(Duration::from_secs(BDK_WALLET_SYNC_TIMEOUT_SECS), spawn_fut);
 
@@ -185,18 +185,8 @@ impl ElectrumRuntimeClient {
 		let txid = tx.compute_txid();
 		let tx_bytes = tx.encode();
 
-		let spawn_fut = if let Ok(spawn_fut) =
-			self.runtime.spawn_blocking(move || electrum_client.transaction_broadcast(&tx))
-		{
-			spawn_fut
-		} else {
-			debug_assert!(
-				false,
-				"Failed to broadcast due to runtime being unavailable. This should never happen."
-			);
-			return;
-		};
-
+		let spawn_fut =
+			self.runtime.spawn_blocking(move || electrum_client.transaction_broadcast(&tx));
 		let timeout_fut =
 			tokio::time::timeout(Duration::from_secs(TX_BROADCAST_TIMEOUT_SECS), spawn_fut);
 
@@ -242,7 +232,7 @@ impl ElectrumRuntimeClient {
 			batch.estimate_fee(num_blocks);
 		}
 
-		let spawn_fut = self.runtime.spawn_blocking(move || electrum_client.batch_call(&batch))?;
+		let spawn_fut = self.runtime.spawn_blocking(move || electrum_client.batch_call(&batch));
 
 		let timeout_fut = tokio::time::timeout(
 			Duration::from_secs(FEE_RATE_CACHE_UPDATE_TIMEOUT_SECS),

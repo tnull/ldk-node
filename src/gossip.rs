@@ -7,8 +7,8 @@
 
 use crate::chain::ChainSource;
 use crate::config::RGS_SYNC_TIMEOUT_SECS;
-use crate::logger::{log_error, log_trace, LdkLogger, Logger};
-use crate::runtime::{Runtime, RuntimeError};
+use crate::logger::{log_trace, LdkLogger, Logger};
+use crate::runtime::Runtime;
 use crate::types::{GossipSync, Graph, P2PGossipSync, PeerManager, RapidGossipSync, UtxoLookup};
 use crate::Error;
 
@@ -22,7 +22,6 @@ use std::time::Duration;
 pub(crate) enum GossipSource {
 	P2PNetwork {
 		gossip_sync: Arc<P2PGossipSync>,
-		logger: Arc<Logger>,
 	},
 	RapidGossipSync {
 		gossip_sync: Arc<RapidGossipSync>,
@@ -39,7 +38,7 @@ impl GossipSource {
 			None::<Arc<UtxoLookup>>,
 			Arc::clone(&logger),
 		));
-		Self::P2PNetwork { gossip_sync, logger }
+		Self::P2PNetwork { gossip_sync }
 	}
 
 	pub fn new_rgs(
@@ -67,9 +66,9 @@ impl GossipSource {
 		runtime: Arc<Runtime>,
 	) {
 		match self {
-			Self::P2PNetwork { gossip_sync, logger } => {
+			Self::P2PNetwork { gossip_sync } => {
 				if let Some(utxo_source) = chain_source.as_utxo_source() {
-					let spawner = RuntimeSpawner::new(Arc::clone(&runtime), Arc::clone(&logger));
+					let spawner = RuntimeSpawner::new(Arc::clone(&runtime));
 					let gossip_verifier = Arc::new(GossipVerifier::new(
 						utxo_source,
 						spawner,
@@ -135,20 +134,16 @@ impl GossipSource {
 
 pub(crate) struct RuntimeSpawner {
 	runtime: Arc<Runtime>,
-	logger: Arc<Logger>,
 }
 
 impl RuntimeSpawner {
-	pub(crate) fn new(runtime: Arc<Runtime>, logger: Arc<Logger>) -> Self {
-		Self { runtime, logger }
+	pub(crate) fn new(runtime: Arc<Runtime>) -> Self {
+		Self { runtime }
 	}
 }
 
 impl FutureSpawner for RuntimeSpawner {
 	fn spawn<T: Future<Output = ()> + Send + 'static>(&self, future: T) {
-		if let Err(RuntimeError::NotRunning) = self.runtime.spawn(future) {
-			log_error!(self.logger, "Tried spawing a future while the runtime wasn't available. This should never happen.");
-			debug_assert!(false, "Tried spawing a future while the runtime wasn't available. This should never happen.");
-		}
+		self.runtime.spawn(future);
 	}
 }

@@ -13,7 +13,6 @@ use crate::config::LDK_PAYMENT_RETRY_TIMEOUT;
 use crate::error::Error;
 use crate::logger::{log_error, log_info, LdkLogger, Logger};
 use crate::payment::store::{PaymentDetails, PaymentDirection, PaymentKind, PaymentStatus};
-use crate::runtime::Runtime;
 use crate::types::{ChannelManager, PaymentStore};
 
 use lightning::ln::channelmanager::{PaymentId, Retry};
@@ -26,7 +25,7 @@ use lightning::util::string::UntrustedString;
 use rand::RngCore;
 
 use std::num::NonZeroU64;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 /// A payment handler allowing to create and pay [BOLT 12] offers and refunds.
@@ -36,18 +35,18 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 /// [BOLT 12]: https://github.com/lightning/bolts/blob/master/12-offer-encoding.md
 /// [`Node::bolt12_payment`]: crate::Node::bolt12_payment
 pub struct Bolt12Payment {
-	runtime: Arc<Runtime>,
 	channel_manager: Arc<ChannelManager>,
 	payment_store: Arc<PaymentStore>,
+	is_running: Arc<RwLock<bool>>,
 	logger: Arc<Logger>,
 }
 
 impl Bolt12Payment {
 	pub(crate) fn new(
-		runtime: Arc<Runtime>, channel_manager: Arc<ChannelManager>,
-		payment_store: Arc<PaymentStore>, logger: Arc<Logger>,
+		channel_manager: Arc<ChannelManager>, payment_store: Arc<PaymentStore>,
+		is_running: Arc<RwLock<bool>>, logger: Arc<Logger>,
 	) -> Self {
-		Self { runtime, channel_manager, payment_store, logger }
+		Self { channel_manager, payment_store, is_running, logger }
 	}
 
 	/// Send a payment given an offer.
@@ -59,7 +58,7 @@ impl Bolt12Payment {
 	pub fn send(
 		&self, offer: &Offer, quantity: Option<u64>, payer_note: Option<String>,
 	) -> Result<PaymentId, Error> {
-		if !self.runtime.is_running() {
+		if !*self.is_running.read().unwrap() {
 			return Err(Error::NotRunning);
 		}
 
@@ -160,7 +159,7 @@ impl Bolt12Payment {
 	pub fn send_using_amount(
 		&self, offer: &Offer, amount_msat: u64, quantity: Option<u64>, payer_note: Option<String>,
 	) -> Result<PaymentId, Error> {
-		if !self.runtime.is_running() {
+		if !*self.is_running.read().unwrap() {
 			return Err(Error::NotRunning);
 		}
 

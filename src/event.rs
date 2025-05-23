@@ -29,7 +29,7 @@ use crate::io::{
 };
 use crate::logger::{log_debug, log_error, log_info, LdkLogger};
 
-use crate::runtime::{Runtime, RuntimeError};
+use crate::runtime::Runtime;
 
 use lightning::events::bump_transaction::BumpTransactionEvent;
 use lightning::events::{ClosureReason, PaymentPurpose, ReplayEvent};
@@ -1058,10 +1058,7 @@ where
 					forwarding_channel_manager.process_pending_htlc_forwards();
 				};
 
-				if let Err(RuntimeError::NotRunning) = self.runtime.spawn(future) {
-					log_error!(self.logger, "Tried spawing a future while the runtime wasn't available. This should never happen.");
-					debug_assert!(false, "Tried spawing a future while the runtime wasn't available. This should never happen.");
-				}
+				self.runtime.spawn(future);
 			},
 			LdkEvent::SpendableOutputs { outputs, channel_id } => {
 				match self.output_sweeper.track_spendable_outputs(outputs, channel_id, true, None) {
@@ -1441,10 +1438,7 @@ where
 						}
 					}
 				};
-				if let Err(RuntimeError::NotRunning) = self.runtime.spawn(future) {
-					log_error!(self.logger, "Tried spawing a future while the runtime wasn't available. This should never happen.");
-					debug_assert!(false, "Tried spawing a future while the runtime wasn't available. This should never happen.");
-				}
+				self.runtime.spawn(future);
 			},
 			LdkEvent::BumpTransaction(bte) => {
 				match bte {

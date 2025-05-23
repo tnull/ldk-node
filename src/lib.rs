@@ -1,4 +1,4 @@
-// This file is Copyright its original authors, visible in version control history.
+// This file is Copyright its original authors, visible in version control history.lib
 //
 // This file is licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
 // http://www.apache.org/licenses/LICENSE-2.0> or the MIT license <LICENSE-MIT or
@@ -202,6 +202,7 @@ pub struct Node {
 	scorer: Arc<Mutex<Scorer>>,
 	peer_store: Arc<PeerStore<Arc<Logger>>>,
 	payment_store: Arc<PaymentStore>,
+	is_running: Arc<RwLock<bool>>,
 	is_listening: Arc<AtomicBool>,
 	node_metrics: Arc<RwLock<NodeMetrics>>,
 }
@@ -216,26 +217,12 @@ impl Node {
 	/// After this returns, the [`Node`] instance can be controlled via the provided API methods in
 	/// a thread-safe manner.
 	pub fn start(&self) -> Result<(), Error> {
-		self.runtime.start()?;
-		self.start_inner()
-	}
-
-	/// Starts the necessary background tasks (such as handling events coming from user input,
-	/// LDK/BDK, and the peer-to-peer network) on the the given `runtime`.
-	///
-	/// This allows to have LDK Node to specify an outer pre-existing runtime, e.g., to avoid
-	/// stacking Tokio runtime contexts. Note we require the runtime to be of the `multithreaded`
-	/// flavor.
-	///
-	/// After this returns, the [`Node`] instance can be controlled via the provided API methods in
-	/// a thread-safe manner.
-	pub fn start_with_runtime(&self, handle: tokio::runtime::Handle) -> Result<(), Error> {
-		self.runtime.start_from_handle(handle)?;
-		self.start_inner()
-	}
-
-	fn start_inner(&self) -> Result<(), Error> {
 		// Acquire a run lock and hold it until we're setup.
+		let mut is_running_lock = self.is_running.write().unwrap();
+		if *is_running_lock {
+			return Err(Error::AlreadyRunning);
+		}
+
 		log_info!(
 			self.logger,
 			"Starting up LDK Node with node ID {} on network: {}",
@@ -251,7 +238,7 @@ impl Node {
 
 		// Block to ensure we update our fee rate cache once on startup
 		let chain_source = Arc::clone(&self.chain_source);
-		self.runtime.block_on(async move { chain_source.update_fee_rate_estimates().await })??;
+		self.runtime.block_on(async move { chain_source.update_fee_rate_estimates().await })?;
 
 		// Spawn background task continuously syncing onchain, lightning, and fee rate cache.
 		let stop_sync_receiver = self.stop_sender.subscribe();
@@ -263,7 +250,7 @@ impl Node {
 			chain_source
 				.continuously_sync_wallets(stop_sync_receiver, sync_cman, sync_cmon, sync_sweeper)
 				.await;
-		})?;
+		});
 
 		if self.gossip_source.is_rgs() {
 			let gossip_source = Arc::clone(&self.gossip_source);
@@ -312,7 +299,7 @@ impl Node {
 						}
 					}
 				}
-			})?;
+			});
 		}
 
 		if let Some(listening_addresses) = &self.config.listening_addresses {
@@ -376,7 +363,7 @@ impl Node {
 				}
 
 				listening_indicator.store(false, Ordering::Release);
-			})?;
+			});
 		}
 
 		// Regularly reconnect to persisted peers.
@@ -413,7 +400,7 @@ impl Node {
 						}
 				}
 			}
-		})?;
+		});
 
 		// Regularly broadcast node announcements.
 		let bcast_cm = Arc::clone(&self.channel_manager);
@@ -496,7 +483,7 @@ impl Node {
 						}
 					}
 				}
-			})?;
+			});
 		}
 
 		let mut stop_tx_bcast = self.stop_sender.subscribe();
@@ -520,7 +507,7 @@ impl Node {
 						}
 				}
 			}
-		})?;
+		});
 
 		let bump_tx_event_handler = Arc::new(BumpTransactionEventHandler::new(
 			Arc::clone(&self.tx_broadcaster),
@@ -612,7 +599,7 @@ impl Node {
 					debug_assert!(false);
 				},
 			}
-		})?;
+		});
 
 		if let Some(liquidity_source) = self.liquidity_source.as_ref() {
 			let mut stop_liquidity_handler = self.stop_sender.subscribe();
@@ -631,10 +618,11 @@ impl Node {
 						_ = liquidity_handler.handle_next_event() => {}
 					}
 				}
-			})?;
+			});
 		}
 
 		log_info!(self.logger, "Startup complete.");
+		*is_running_lock = true;
 		Ok(())
 	}
 
@@ -642,7 +630,8 @@ impl Node {
 	///
 	/// After this returns most API methods will return [`Error::NotRunning`].
 	pub fn stop(&self) -> Result<(), Error> {
-		if !self.runtime.is_running() {
+		let mut is_running_lock = self.is_running.write().unwrap();
+		if !*is_running_lock {
 			return Err(Error::NotRunning);
 		}
 
@@ -680,7 +669,7 @@ impl Node {
 				event_handling_stopped_receiver.changed(),
 			)
 			.await
-		})?;
+		});
 
 		match timeout_res {
 			Ok(stop_res) => match stop_res {
@@ -703,15 +692,24 @@ impl Node {
 			},
 		}
 
-		self.runtime.stop()?;
+		#[cfg(tokio_unstable)]
+		{
+			let runtime_handle = self.runtime.handle();
+			log_trace!(
+				self.logger,
+				"Active runtime tasks left prior to shutdown: {}",
+				runtime_handle.metrics().active_tasks_count()
+			);
+		}
 
 		log_info!(self.logger, "Shutdown complete.");
+		*is_running_lock = false;
 		Ok(())
 	}
 
 	/// Returns the status of the [`Node`].
 	pub fn status(&self) -> NodeStatus {
-		let is_running = self.runtime.is_running();
+		let is_running = *self.is_running.read().unwrap();
 		let is_listening = self.is_listening.load(Ordering::Acquire);
 		let current_best_block = self.channel_manager.current_best_block().into();
 		let locked_node_metrics = self.node_metrics.read().unwrap();
@@ -832,6 +830,7 @@ impl Node {
 			Arc::clone(&self.payment_store),
 			Arc::clone(&self.peer_store),
 			Arc::clone(&self.config),
+			Arc::clone(&self.is_running),
 			Arc::clone(&self.logger),
 		)
 	}
@@ -849,6 +848,7 @@ impl Node {
 			Arc::clone(&self.payment_store),
 			Arc::clone(&self.peer_store),
 			Arc::clone(&self.config),
+			Arc::clone(&self.is_running),
 			Arc::clone(&self.logger),
 		))
 	}
@@ -859,9 +859,9 @@ impl Node {
 	#[cfg(not(feature = "uniffi"))]
 	pub fn bolt12_payment(&self) -> Bolt12Payment {
 		Bolt12Payment::new(
-			Arc::clone(&self.runtime),
 			Arc::clone(&self.channel_manager),
 			Arc::clone(&self.payment_store),
+			Arc::clone(&self.is_running),
 			Arc::clone(&self.logger),
 		)
 	}
@@ -872,9 +872,9 @@ impl Node {
 	#[cfg(feature = "uniffi")]
 	pub fn bolt12_payment(&self) -> Arc<Bolt12Payment> {
 		Arc::new(Bolt12Payment::new(
-			Arc::clone(&self.runtime),
 			Arc::clone(&self.channel_manager),
 			Arc::clone(&self.payment_store),
+			Arc::clone(&self.is_running),
 			Arc::clone(&self.logger),
 		))
 	}
@@ -883,11 +883,11 @@ impl Node {
 	#[cfg(not(feature = "uniffi"))]
 	pub fn spontaneous_payment(&self) -> SpontaneousPayment {
 		SpontaneousPayment::new(
-			Arc::clone(&self.runtime),
 			Arc::clone(&self.channel_manager),
 			Arc::clone(&self.keys_manager),
 			Arc::clone(&self.payment_store),
 			Arc::clone(&self.config),
+			Arc::clone(&self.is_running),
 			Arc::clone(&self.logger),
 		)
 	}
@@ -896,11 +896,11 @@ impl Node {
 	#[cfg(feature = "uniffi")]
 	pub fn spontaneous_payment(&self) -> Arc<SpontaneousPayment> {
 		Arc::new(SpontaneousPayment::new(
-			Arc::clone(&self.runtime),
 			Arc::clone(&self.channel_manager),
 			Arc::clone(&self.keys_manager),
 			Arc::clone(&self.payment_store),
 			Arc::clone(&self.config),
+			Arc::clone(&self.is_running),
 			Arc::clone(&self.logger),
 		))
 	}
@@ -909,10 +909,10 @@ impl Node {
 	#[cfg(not(feature = "uniffi"))]
 	pub fn onchain_payment(&self) -> OnchainPayment {
 		OnchainPayment::new(
-			Arc::clone(&self.runtime),
 			Arc::clone(&self.wallet),
 			Arc::clone(&self.channel_manager),
 			Arc::clone(&self.config),
+			Arc::clone(&self.is_running),
 			Arc::clone(&self.logger),
 		)
 	}
@@ -921,10 +921,10 @@ impl Node {
 	#[cfg(feature = "uniffi")]
 	pub fn onchain_payment(&self) -> Arc<OnchainPayment> {
 		Arc::new(OnchainPayment::new(
-			Arc::clone(&self.runtime),
 			Arc::clone(&self.wallet),
 			Arc::clone(&self.channel_manager),
 			Arc::clone(&self.config),
+			Arc::clone(&self.is_running),
 			Arc::clone(&self.logger),
 		))
 	}
@@ -1002,7 +1002,7 @@ impl Node {
 	pub fn connect(
 		&self, node_id: PublicKey, address: SocketAddress, persist: bool,
 	) -> Result<(), Error> {
-		if !self.runtime.is_running() {
+		if !*self.is_running.read().unwrap() {
 			return Err(Error::NotRunning);
 		}
 
@@ -1016,7 +1016,7 @@ impl Node {
 		// connection futures going forward.
 		self.runtime.block_on(async move {
 			con_cm.connect_peer_if_necessary(con_node_id, con_addr).await
-		})??;
+		})?;
 
 		log_info!(self.logger, "Connected to peer {}@{}. ", peer_info.node_id, peer_info.address);
 
@@ -1032,7 +1032,7 @@ impl Node {
 	/// Will also remove the peer from the peer store, i.e., after this has been called we won't
 	/// try to reconnect on restart.
 	pub fn disconnect(&self, counterparty_node_id: PublicKey) -> Result<(), Error> {
-		if !self.runtime.is_running() {
+		if !*self.is_running.read().unwrap() {
 			return Err(Error::NotRunning);
 		}
 
@@ -1054,7 +1054,7 @@ impl Node {
 		push_to_counterparty_msat: Option<u64>, channel_config: Option<ChannelConfig>,
 		announce_for_forwarding: bool,
 	) -> Result<UserChannelId, Error> {
-		if !self.runtime.is_running() {
+		if !*self.is_running.read().unwrap() {
 			return Err(Error::NotRunning);
 		}
 
@@ -1082,7 +1082,7 @@ impl Node {
 		// connection futures going forward.
 		self.runtime.block_on(async move {
 			con_cm.connect_peer_if_necessary(con_node_id, con_addr).await
-		})??;
+		})?;
 
 		// Fail if we have less than the channel value + anchor reserve available (if applicable).
 		let init_features = self
@@ -1230,7 +1230,7 @@ impl Node {
 	///
 	/// [`EsploraSyncConfig::background_sync_config`]: crate::config::EsploraSyncConfig::background_sync_config
 	pub fn sync_wallets(&self) -> Result<(), Error> {
-		if !self.runtime.is_running() {
+		if !*self.is_running.read().unwrap() {
 			return Err(Error::NotRunning);
 		}
 
@@ -1258,7 +1258,7 @@ impl Node {
 				},
 			}
 			Ok(())
-		})?
+		})
 	}
 
 	/// Close a previously opened channel.
