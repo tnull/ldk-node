@@ -190,6 +190,10 @@ impl ElectrumRuntimeClient {
 		{
 			spawn_fut
 		} else {
+			debug_assert!(
+				false,
+				"Failed to broadcast due to runtime being unavailable. This should never happen."
+			);
 			return;
 		};
 
