@@ -299,7 +299,7 @@ impl Wallet {
 		#[cfg(debug_assertions)]
 		if balance.confirmed != Amount::ZERO {
 			debug_assert!(
-				self.list_confirmed_utxos().map_or(false, |v| !v.is_empty()),
+				self.list_confirmed_utxos_inner().map_or(false, |v| !v.is_empty()),
 				"Confirmed amounts should always be available for Anchor spending"
 			);
 		}
@@ -549,70 +549,8 @@ impl Wallet {
 
 		Ok(txid)
 	}
-}
 
-impl Listen for Wallet {
-	fn filtered_block_connected(
-		&self, _header: &bitcoin::block::Header,
-		_txdata: &lightning::chain::transaction::TransactionData, _height: u32,
-	) {
-		debug_assert!(false, "Syncing filtered blocks is currently not supported");
-		// As far as we can tell this would be a no-op anyways as we don't have to tell BDK about
-		// the header chain of intermediate blocks. According to the BDK team, it's sufficient to
-		// only connect full blocks starting from the last point of disagreement.
-	}
-
-	fn block_connected(&self, block: &bitcoin::Block, height: u32) {
-		let mut locked_wallet = self.inner.lock().unwrap();
-
-		let pre_checkpoint = locked_wallet.latest_checkpoint();
-		if pre_checkpoint.height() != height - 1
-			|| pre_checkpoint.hash() != block.header.prev_blockhash
-		{
-			log_debug!(
-				self.logger,
-				"Detected reorg while applying a connected block to on-chain wallet: new block with hash {} at height {}",
-				block.header.block_hash(),
-				height
-			);
-		}
-
-		match locked_wallet.apply_block(block, height) {
-			Ok(()) => {
-				if let Err(e) = self.update_payment_store(&mut *locked_wallet) {
-					log_error!(self.logger, "Failed to update payment store: {}", e);
-					return;
-				}
-			},
-			Err(e) => {
-				log_error!(
-					self.logger,
-					"Failed to apply connected block to on-chain wallet: {}",
-					e
-				);
-				return;
-			},
-		};
-
-		let mut locked_persister = self.persister.lock().unwrap();
-		match locked_wallet.persist(&mut locked_persister) {
-			Ok(_) => (),
-			Err(e) => {
-				log_error!(self.logger, "Failed to persist on-chain wallet: {}", e);
-				return;
-			},
-		};
-	}
-
-	fn block_disconnected(&self, _header: &bitcoin::block::Header, _height: u32) {
-		// This is a no-op as we don't have to tell BDK about disconnections. According to the BDK
-		// team, it's sufficient in case of a reorg to always connect blocks starting from the last
-		// point of disagreement.
-	}
-}
-
-impl WalletSource for Wallet {
-	fn list_confirmed_utxos(&self) -> Result<Vec<Utxo>, ()> {
+	fn list_confirmed_utxos_inner(&self) -> Result<Vec<Utxo>, ()> {
 		let locked_wallet = self.inner.lock().unwrap();
 		let mut utxos = Vec::new();
 		let confirmed_txs: Vec<Txid> = locked_wallet
@@ -704,7 +642,7 @@ impl WalletSource for Wallet {
 		Ok(utxos)
 	}
 
-	fn get_change_script(&self) -> Result<ScriptBuf, ()> {
+	fn get_change_script_inner(&self) -> Result<ScriptBuf, ()> {
 		let mut locked_wallet = self.inner.lock().unwrap();
 		let mut locked_persister = self.persister.lock().unwrap();
 
@@ -716,7 +654,7 @@ impl WalletSource for Wallet {
 		Ok(address_info.address.script_pubkey())
 	}
 
-	fn sign_psbt(&self, mut psbt: Psbt) -> Result<Transaction, ()> {
+	fn sign_psbt_inner(&self, mut psbt: Psbt) -> Result<Transaction, ()> {
 		let locked_wallet = self.inner.lock().unwrap();
 
 		// While BDK populates both `witness_utxo` and `non_witness_utxo` fields, LDK does not. As
@@ -743,6 +681,86 @@ impl WalletSource for Wallet {
 		})?;
 
 		Ok(tx)
+	}
+}
+
+impl Listen for Wallet {
+	fn filtered_block_connected(
+		&self, _header: &bitcoin::block::Header,
+		_txdata: &lightning::chain::transaction::TransactionData, _height: u32,
+	) {
+		debug_assert!(false, "Syncing filtered blocks is currently not supported");
+		// As far as we can tell this would be a no-op anyways as we don't have to tell BDK about
+		// the header chain of intermediate blocks. According to the BDK team, it's sufficient to
+		// only connect full blocks starting from the last point of disagreement.
+	}
+
+	fn block_connected(&self, block: &bitcoin::Block, height: u32) {
+		let mut locked_wallet = self.inner.lock().unwrap();
+
+		let pre_checkpoint = locked_wallet.latest_checkpoint();
+		if pre_checkpoint.height() != height - 1
+			|| pre_checkpoint.hash() != block.header.prev_blockhash
+		{
+			log_debug!(
+				self.logger,
+				"Detected reorg while applying a connected block to on-chain wallet: new block with hash {} at height {}",
+				block.header.block_hash(),
+				height
+			);
+		}
+
+		match locked_wallet.apply_block(block, height) {
+			Ok(()) => {
+				if let Err(e) = self.update_payment_store(&mut *locked_wallet) {
+					log_error!(self.logger, "Failed to update payment store: {}", e);
+					return;
+				}
+			},
+			Err(e) => {
+				log_error!(
+					self.logger,
+					"Failed to apply connected block to on-chain wallet: {}",
+					e
+				);
+				return;
+			},
+		};
+
+		let mut locked_persister = self.persister.lock().unwrap();
+		match locked_wallet.persist(&mut locked_persister) {
+			Ok(_) => (),
+			Err(e) => {
+				log_error!(self.logger, "Failed to persist on-chain wallet: {}", e);
+				return;
+			},
+		};
+	}
+
+	fn block_disconnected(&self, _header: &bitcoin::block::Header, _height: u32) {
+		// This is a no-op as we don't have to tell BDK about disconnections. According to the BDK
+		// team, it's sufficient in case of a reorg to always connect blocks starting from the last
+		// point of disagreement.
+	}
+}
+
+impl WalletSource for Wallet {
+	fn list_confirmed_utxos<'a>(
+		&'a self,
+	) -> Pin<Box<dyn Future<Output = Result<Vec<Utxo>, ()>> + Send + 'a>> {
+		Box::pin(async move { self.list_confirmed_utxos_inner() })
+	}
+
+	fn get_change_script<'a>(
+		&'a self,
+	) -> Pin<Box<dyn Future<Output = Result<ScriptBuf, ()>> + Send + 'a>> {
+		Box::pin(async move { self.get_change_script_inner() })
+	}
+
+	fn sign_psbt<'a>(
+		&'a self, psbt: Psbt,
+	) -> Pin<Box<dyn Future<Output = Result<Transaction, ()>> + Send + 'a>> {
+		Box::pin(async move { self.sign_psbt_inner(psbt) })
 	}
 }
 

@@ -1500,7 +1500,7 @@ where
 					BumpTransactionEvent::HTLCResolution { .. } => {},
 				}
 
-				self.bump_tx_event_handler.handle_event(&bte);
+				self.bump_tx_event_handler.handle_event(&bte).await;
 			},
 			LdkEvent::OnionMessageIntercepted { .. } => {
 				debug_assert!(false, "We currently don't support onion message interception, so this event should never be emitted.");
