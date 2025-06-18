@@ -281,8 +281,15 @@ class LibraryTest {
             else -> return
         }
 
-        val description = Bolt11InvoiceDescription.Direct("asdf")
+        val description = Bolt11InvoiceDescription.Direct("")
         val invoice = node2.bolt11Payment().receive(2500000u, description, 9217u)
+        
+        val asdf = invoice.invoiceDescription();
+        println("Got event: $asdf")
+        when (asdf) {
+            is Bolt11InvoiceDescription.Direct -> println("DIRECT")
+            is Bolt11InvoiceDescription.Hash -> println("HASH")
+        }
 
         node1.bolt11Payment().send(invoice, null)
 
