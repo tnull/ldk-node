@@ -19,18 +19,18 @@ use bitcoin::blockdata::constants::WITNESS_SCALE_FACTOR;
 use bitcoin::blockdata::locktime::absolute::LockTime;
 use bitcoin::hashes::Hash;
 use bitcoin::key::XOnlyPublicKey;
-use bitcoin::psbt::Psbt;
+use bitcoin::psbt::{self, Psbt};
 use bitcoin::secp256k1::ecdh::SharedSecret;
 use bitcoin::secp256k1::ecdsa::{RecoverableSignature, Signature};
 use bitcoin::secp256k1::{All, PublicKey, Scalar, Secp256k1, SecretKey};
 use bitcoin::{
-	Address, Amount, FeeRate, Network, ScriptBuf, Transaction, TxOut, Txid, WPubkeyHash,
+	Address, Amount, FeeRate, Network, ScriptBuf, Transaction, TxOut, Txid, WPubkeyHash, Weight,
 	WitnessProgram, WitnessVersion,
 };
 use lightning::chain::chaininterface::BroadcasterInterface;
 use lightning::chain::channelmonitor::ANTI_REORG_DELAY;
-use lightning::chain::{BestBlock, Listen};
-use lightning::events::bump_transaction::{Utxo, WalletSource};
+use lightning::chain::{BestBlock, ClaimId, Listen};
+use lightning::events::bump_transaction::{CoinSelection, Input, Utxo, WalletSource};
 use lightning::ln::channelmanager::PaymentId;
 use lightning::ln::inbound_payment::ExpandedKey;
 use lightning::ln::msgs::UnsignedGossipMessage;
@@ -557,6 +557,46 @@ impl Wallet {
 		}
 
 		Ok(txid)
+	}
+
+	fn select_confirmed_utxos_inner<'a>(
+		&self, claim_id: ClaimId, must_spend: Vec<Input>, must_pay_to: &'a [TxOut],
+		target_feerate_sat_per_1000_weight: u32,
+	) -> Result<CoinSelection, ()> {
+		let mut tx_builder = self.inner.lock().unwrap().build_tx();
+		for input in &must_spend {
+			let psbt_input =
+				psbt::Input { witness_utxo: Some(input.previous_utxo), ..Default::default() };
+			let weight = Weight::from_wu(input.satisfaction_weight);
+			tx_builder.add_foreign_utxo(input.outpoint, psbt_input, weight).map_err(|_| ())?;
+		}
+
+		for output in must_pay_to {
+			tx_builder.add_recipient(output.script_pubkey, output.value);
+		}
+
+		let fee_rate = FeeRate::from_sat_per_kwu(target_feerate_sat_per_1000_weight as u64);
+		tx_builder.fee_rate(fee_rate);
+		tx_builder.exclude_unconfirmed();
+
+		let psbt = tx_builder.finish().map_err(|_| ())?;
+
+		let confirmed_utxos = (psbt.inputs.iter())
+			.zip(psbt.unsigned_tx.input.iter())
+			.filter(|(psbt_input, tx_input)| {
+				must_spend.iter().all(|i| i.outpoint != tx_input.previous_output)
+			})
+			.map(|(psbt_input, tx_input)| Utxo {
+				outpoint: tx_input.previous_output,
+				output: psbt_input.witness_utxo.clone().unwrap(),
+				satisfaction_weight: 1 /* empty script_sig */ * WITNESS_SCALE_FACTOR as u64 +
+                    1 /* witness items */ + 1 /* schnorr sig len */ + 64, /* schnorr sig */
+			})
+			.collect::<Vec<_>>();
+		let change_output = None;
+
+		// TODO: match by WitnessVersion
+		Ok(CoinSelection { confirmed_utxos, change_output })
 	}
 
 	fn list_confirmed_utxos_inner(&self) -> Result<Vec<Utxo>, ()> {
