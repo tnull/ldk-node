@@ -103,16 +103,31 @@ impl KVStoreSync for VssStore {
 	) -> io::Result<()> {
 		let locking_key = self.build_locking_key(primary_namespace, secondary_namespace, key);
 		let (inner_lock_ref, version) = self.get_new_version_and_lock_ref(locking_key.clone());
-		let fut = self.inner.write_internal(
-			inner_lock_ref,
-			locking_key,
-			version,
-			primary_namespace,
-			secondary_namespace,
-			key,
-			buf,
-		);
-		self.runtime.block_on(fut)
+		let write_id: u64 = rand::random();
+		println!("WRITE {} IS SYNC", write_id);
+		let primary_namespace = primary_namespace.to_string();
+		let secondary_namespace = secondary_namespace.to_string();
+		let key = key.to_string();
+		let inner = Arc::clone(&self.inner);
+		let fut = async move {
+			inner
+				.write_internal(
+					inner_lock_ref,
+					locking_key,
+					version,
+					&primary_namespace,
+					&secondary_namespace,
+					&key,
+					buf,
+					write_id,
+				)
+				.await
+		};
+		// let spawned_fut = self.inner_runtime.spawn(fut);
+		// self
+		// 	.runtime
+		// 	.block_on( async { spawned_fut.await.unwrap() })
+		self.runtime.spawn_block_on(async { fut.await }, write_id)
 	}
 
 	fn remove(
@@ -158,6 +173,8 @@ impl KVStore for VssStore {
 		let secondary_namespace = secondary_namespace.to_string();
 		let key = key.to_string();
 		let inner = Arc::clone(&self.inner);
+		let write_id: u64 = rand::random();
+		println!("WRITE {} IS ASYNC", write_id);
 		Box::pin(async move {
 			inner
 				.write_internal(
@@ -168,6 +185,7 @@ impl KVStore for VssStore {
 					&secondary_namespace,
 					&key,
 					buf,
+					write_id,
 				)
 				.await
 		})
@@ -332,7 +350,7 @@ impl VssStoreInner {
 
 	async fn write_internal(
 		&self, inner_lock_ref: Arc<tokio::sync::Mutex<u64>>, locking_key: String, version: u64,
-		primary_namespace: &str, secondary_namespace: &str, key: &str, buf: Vec<u8>,
+		primary_namespace: &str, secondary_namespace: &str, key: &str, buf: Vec<u8>, write_id: u64,
 	) -> io::Result<()> {
 		check_namespace_key_validity(primary_namespace, secondary_namespace, Some(key), "write")?;
 
@@ -345,21 +363,39 @@ impl VssStoreInner {
 				store_id: self.store_id.clone(),
 				global_version: None,
 				transaction_items: vec![KeyValue {
-					key: obfuscated_key,
+					key: obfuscated_key.clone(),
 					version: vss_version,
 					value: storable.encode_to_vec(),
 				}],
 				delete_items: vec![],
 			};
 
-			self.client.put_object(&request).await.map_err(|e| {
+			println!(
+				"WRITE {}: {}/{}/{} ({})",
+				write_id, primary_namespace, secondary_namespace, key, obfuscated_key
+			);
+			let fut = self.client.put_object(&request);
+			// let res =
+			// 	tokio::time::timeout(Duration::from_secs(5), fut).await.unwrap().map_err(|e| {
+			// 		let msg = format!(
+			// 			"Failed to write to key {}/{}/{}: {}",
+			// 			primary_namespace, secondary_namespace, key, e
+			// 		);
+			// 		Error::new(ErrorKind::Other, msg)
+			// 	});
+			let res = fut.await.map_err(|e| {
 				let msg = format!(
 					"Failed to write to key {}/{}/{}: {}",
 					primary_namespace, secondary_namespace, key, e
 				);
 				Error::new(ErrorKind::Other, msg)
-			})?;
+			});
+			println!(
+				"WRITE DONE {}: {}/{}/{} ({})",
+				write_id, primary_namespace, secondary_namespace, key, obfuscated_key
+			);
 
+			res?;
 			Ok(())
 		})
 		.await
@@ -417,7 +453,9 @@ impl VssStoreInner {
 		callback: FN,
 	) -> Result<(), lightning::io::Error> {
 		let res = {
+            println!("BEFORE TAKING THE LOCK");
 			let mut last_written_version = inner_lock_ref.lock().await;
+            println!("AFTER TAKING THE LOCK");
 
 			// Check if we already have a newer version written/removed. This is used in async contexts to realize eventual
 			// consistency.

@@ -29,7 +29,16 @@ impl Runtime {
 		let mode = match tokio::runtime::Handle::try_current() {
 			Ok(handle) => RuntimeMode::Handle(handle),
 			Err(_) => {
-				let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build()?;
+				let rt = tokio::runtime::Builder::new_multi_thread()
+                    .thread_name_fn(|| {
+                        "MY-CUSTOM".to_owned()
+                    })
+                    .worker_threads(5)
+                    .max_blocking_threads(20)
+                    .on_thread_start(|| {
+                        println!("THREAD started");
+                    })
+                    .enable_all().build()?;
 				RuntimeMode::Owned(rt)
 			},
 		};
@@ -67,7 +76,7 @@ impl Runtime {
 	{
 		let mut background_tasks = self.background_tasks.lock().unwrap();
 		let runtime_handle = self.handle();
-		background_tasks.spawn_on(future, runtime_handle);
+		background_tasks.spawn_on(async { future.await }, runtime_handle);
 	}
 
 	pub fn spawn_cancellable_background_task<F>(&self, future: F)
@@ -76,7 +85,7 @@ impl Runtime {
 	{
 		let mut cancellable_background_tasks = self.cancellable_background_tasks.lock().unwrap();
 		let runtime_handle = self.handle();
-		cancellable_background_tasks.spawn_on(future, runtime_handle);
+		cancellable_background_tasks.spawn_on(async { future.await }, runtime_handle);
 	}
 
 	pub fn spawn_background_processor_task<F>(&self, future: F)
@@ -87,7 +96,7 @@ impl Runtime {
 		debug_assert!(background_processor_task.is_none(), "Expected no background processor_task");
 
 		let runtime_handle = self.handle();
-		let handle = runtime_handle.spawn(future);
+		let handle = runtime_handle.spawn(async { future.await });
 		*background_processor_task = Some(handle);
 	}
 
@@ -106,21 +115,39 @@ impl Runtime {
 		// during `block_on`, as this is the context `block_in_place` would operate on. So we try
 		// to detect the outer context here, and otherwise use whatever was set during
 		// initialization.
-		let handle = tokio::runtime::Handle::try_current().unwrap_or(self.handle().clone());
-		tokio::task::block_in_place(move || handle.block_on(future))
+		let runtime_handle = tokio::runtime::Handle::try_current().unwrap_or(self.handle().clone());
+		tokio::task::block_in_place(move || runtime_handle.block_on(async { future.await }))
+	}
+
+	pub fn spawn_block_on<F: Future + Send + 'static>(&self, future: F, write_id: u64) -> F::Output
+	where
+		<F as std::future::Future>::Output: Send + std::fmt::Debug,
+	{
+		// While we generally decided not to overthink via which call graph users would enter our
+		// runtime context, we'd still try to reuse whatever current context would be present
+		// during `block_on`, as this is the context `block_in_place` would operate on. So we try
+		// to detect the outer context here, and otherwise use whatever was set during
+		// initialization.
+		let runtime_handle = tokio::runtime::Handle::try_current().unwrap_or(self.handle().clone());
+		println!("RUNTIME STATS BEFORE: {} workers, {} blocking queue depth", runtime_handle.metrics().num_workers(), runtime_handle.metrics().blocking_queue_depth());
+		let res = tokio::task::block_in_place(move || runtime_handle.block_on(async { future.await }));
+		let runtime_handle_2 = tokio::runtime::Handle::try_current().unwrap_or(self.handle().clone());
+		println!("WRITE {} AFTER block_in_place", write_id);
+		println!("RUNTIME STATS AFTER: {} workers, {} blocking queue depth", runtime_handle_2.metrics().num_workers(), runtime_handle_2.metrics().blocking_queue_depth());
+        res
 	}
 
 	pub fn abort_cancellable_background_tasks(&self) {
 		let mut tasks = core::mem::take(&mut *self.cancellable_background_tasks.lock().unwrap());
 		debug_assert!(tasks.len() > 0, "Expected some cancellable background_tasks");
 		tasks.abort_all();
-		self.block_on(async { while let Some(_) = tasks.join_next().await {} })
+		self.block_on(async move { while let Some(_) = tasks.join_next().await {} })
 	}
 
 	pub fn wait_on_background_tasks(&self) {
 		let mut tasks = core::mem::take(&mut *self.background_tasks.lock().unwrap());
 		debug_assert!(tasks.len() > 0, "Expected some background_tasks");
-		self.block_on(async {
+		self.block_on(async move {
 			loop {
 				let timeout_fut = tokio::time::timeout(
 					Duration::from_secs(BACKGROUND_TASK_SHUTDOWN_TIMEOUT_SECS),
@@ -154,7 +181,7 @@ impl Runtime {
 			self.background_processor_task.lock().unwrap().take()
 		{
 			let abort_handle = background_processor_task.abort_handle();
-			let timeout_res = self.block_on(async {
+			let timeout_res = self.block_on(async move {
 				tokio::time::timeout(
 					Duration::from_secs(LDK_EVENT_HANDLER_SHUTDOWN_TIMEOUT_SECS),
 					background_processor_task,

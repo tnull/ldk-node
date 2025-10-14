@@ -91,7 +91,8 @@ bip21 = { version = "0.5", features = ["std"], default-features = false }
 base64 = { version = "0.22.1", default-features = false, features = ["std"] }
 rand = "0.8.5"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
-tokio = { version = "1.37", default-features = false, features = [ "rt-multi-thread", "time", "sync", "macros" ] }
+tokio = { version = "1.37", default-features = false, features = [ "rt-multi-thread", "time", "sync", "macros", "tracing"] }
+console-subscriber = "0.4.1"
 esplora-client = { version = "0.12", default-features = false, features = ["tokio", "async-https-rustls"] }
 electrum-client = { version = "0.24.0", default-features = false, features = ["proxy", "use-rustls-ring"] }
 libc = "0.2"
@@ -100,7 +101,8 @@ serde = { version = "1.0.210", default-features = false, features = ["std", "der
 serde_json = { version = "1.0.128", default-features = false, features = ["std"] }
 log = { version = "0.4.22", default-features = false, features = ["std"]}
 
-vss-client = "0.3"
+#vss-client = "0.3"
+vss-client = { path = "../vss-rust-client" }
 prost = { version = "0.11.6", default-features = false}
 
 [target.'cfg(windows)'.dependencies]
