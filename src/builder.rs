@@ -1161,11 +1161,13 @@ fn build_with_store_internal(
 		});
 
 	// Initialize the status fields.
-	let node_metrics = match node_metris_res {
-		Ok(metrics) => Arc::new(RwLock::new(metrics)),
+	let (node_metrics, legacy_latest_rgs_snapshot_timestamp) = match node_metris_res {
+		Ok((metrics, legacy_latest_rgs_snapshot_timestamp)) => {
+			(Arc::new(RwLock::new(metrics)), legacy_latest_rgs_snapshot_timestamp)
+		},
 		Err(e) => {
 			if e.kind() == std::io::ErrorKind::NotFound {
-				Arc::new(RwLock::new(NodeMetrics::default()))
+				(Arc::new(RwLock::new(NodeMetrics::default())), None)
 			} else {
 				log_error!(logger, "Failed to read node metrics from store: {}", e);
 				return Err(BuildError::ReadFailed);
@@ -1647,6 +1649,9 @@ fn build_with_store_internal(
 	// Initialize the GossipSource
 	// Use the configured gossip source, if the user set one, otherwise default to P2PNetwork.
 	let gossip_source_config = gossip_source_config.unwrap_or(&GossipSourceConfig::P2PNetwork);
+	let network_graph_rgs_timestamp = network_graph.get_last_rapid_gossip_sync_timestamp();
+	let force_full_rgs_sync = legacy_latest_rgs_snapshot_timestamp
+		.is_some_and(|legacy_timestamp| network_graph_rgs_timestamp != Some(legacy_timestamp));
 
 	let gossip_source = match gossip_source_config {
 		GossipSourceConfig::P2PNetwork => {
@@ -1660,7 +1665,7 @@ fn build_with_store_internal(
 		},
 		GossipSourceConfig::RapidGossipSync(rgs_server) => {
 			let latest_sync_timestamp =
-				network_graph.get_last_rapid_gossip_sync_timestamp().unwrap_or(0);
+				if force_full_rgs_sync { 0 } else { network_graph_rgs_timestamp.unwrap_or(0) };
 			Arc::new(GossipSource::new_rgs(
 				rgs_server.clone(),
 				latest_sync_timestamp,

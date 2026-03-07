@@ -20,6 +20,7 @@ use bdk_chain::tx_graph::ChangeSet as BdkTxGraphChangeSet;
 use bdk_chain::ConfirmationBlockTime;
 use bdk_wallet::ChangeSet as BdkWalletChangeSet;
 use bitcoin::Network;
+use lightning::_init_and_read_len_prefixed_tlv_fields;
 use lightning::ln::msgs::DecodeError;
 use lightning::routing::gossip::NetworkGraph;
 use lightning::routing::scoring::{
@@ -329,7 +330,7 @@ pub(crate) async fn read_output_sweeper(
 
 pub(crate) async fn read_node_metrics<L: Deref>(
 	kv_store: &DynStore, logger: L,
-) -> Result<NodeMetrics, std::io::Error>
+) -> Result<(NodeMetrics, Option<u32>), std::io::Error>
 where
 	L::Target: LdkLogger,
 {
@@ -340,10 +341,28 @@ where
 		NODE_METRICS_KEY,
 	)
 	.await?;
-	NodeMetrics::read(&mut &*reader).map_err(|e| {
+	let node_metrics = NodeMetrics::read(&mut &*reader).map_err(|e| {
 		log_error!(logger, "Failed to deserialize NodeMetrics: {}", e);
 		std::io::Error::new(std::io::ErrorKind::InvalidData, "Failed to deserialize NodeMetrics")
-	})
+	})?;
+
+	let legacy_latest_rgs_snapshot_timestamp = (|| {
+		let mut cursor = std::io::Cursor::new(reader.as_slice());
+		let legacy_reader = &mut cursor;
+		_init_and_read_len_prefixed_tlv_fields!(legacy_reader, {
+			(6, latest_rgs_snapshot_timestamp, option),
+		});
+		Ok(latest_rgs_snapshot_timestamp)
+	})()
+	.map_err(|e| {
+		log_error!(logger, "Failed to deserialize legacy NodeMetrics RGS state: {}", e);
+		std::io::Error::new(
+			std::io::ErrorKind::InvalidData,
+			"Failed to deserialize NodeMetrics legacy RGS state",
+		)
+	})?;
+
+	Ok((node_metrics, legacy_latest_rgs_snapshot_timestamp))
 }
 
 pub(crate) fn write_node_metrics<L: Deref>(
