@@ -293,9 +293,7 @@ impl Node {
 
 		if self.gossip_source.is_rgs() {
 			let gossip_source = Arc::clone(&self.gossip_source);
-			let gossip_sync_store = Arc::clone(&self.kv_store);
 			let gossip_sync_logger = Arc::clone(&self.logger);
-			let gossip_node_metrics = Arc::clone(&self.node_metrics);
 			let mut stop_gossip_sync = self.stop_sender.subscribe();
 			self.runtime.spawn_cancellable_background_task(async move {
 				let mut interval = tokio::time::interval(RGS_SYNC_INTERVAL);
@@ -311,20 +309,12 @@ impl Node {
 						_ = interval.tick() => {
 							let now = Instant::now();
 							match gossip_source.update_rgs_snapshot().await {
-								Ok(updated_timestamp) => {
+								Ok(_) => {
 									log_info!(
 										gossip_sync_logger,
 										"Background sync of RGS gossip data finished in {}ms.",
 										now.elapsed().as_millis()
 										);
-									{
-										let mut locked_node_metrics = gossip_node_metrics.write().unwrap();
-										locked_node_metrics.latest_rgs_snapshot_timestamp = Some(updated_timestamp);
-										write_node_metrics(&*locked_node_metrics, &*gossip_sync_store, Arc::clone(&gossip_sync_logger))
-											.unwrap_or_else(|e| {
-												log_error!(gossip_sync_logger, "Persistence failed: {}", e);
-											});
-									}
 								}
 								Err(e) => {
 									log_error!(
@@ -753,7 +743,7 @@ impl Node {
 		let latest_fee_rate_cache_update_timestamp =
 			locked_node_metrics.latest_fee_rate_cache_update_timestamp;
 		let latest_rgs_snapshot_timestamp =
-			locked_node_metrics.latest_rgs_snapshot_timestamp.map(|val| val as u64);
+			self.network_graph.get_last_rapid_gossip_sync_timestamp().map(|val| val as u64);
 		let latest_pathfinding_scores_sync_timestamp =
 			locked_node_metrics.latest_pathfinding_scores_sync_timestamp;
 		let latest_node_announcement_broadcast_timestamp =
@@ -1982,7 +1972,6 @@ pub(crate) struct NodeMetrics {
 	latest_lightning_wallet_sync_timestamp: Option<u64>,
 	latest_onchain_wallet_sync_timestamp: Option<u64>,
 	latest_fee_rate_cache_update_timestamp: Option<u64>,
-	latest_rgs_snapshot_timestamp: Option<u32>,
 	latest_pathfinding_scores_sync_timestamp: Option<u64>,
 	latest_node_announcement_broadcast_timestamp: Option<u64>,
 }
@@ -1993,7 +1982,6 @@ impl Default for NodeMetrics {
 			latest_lightning_wallet_sync_timestamp: None,
 			latest_onchain_wallet_sync_timestamp: None,
 			latest_fee_rate_cache_update_timestamp: None,
-			latest_rgs_snapshot_timestamp: None,
 			latest_pathfinding_scores_sync_timestamp: None,
 			latest_node_announcement_broadcast_timestamp: None,
 		}
@@ -2005,7 +1993,8 @@ impl_writeable_tlv_based!(NodeMetrics, {
 	(1, latest_pathfinding_scores_sync_timestamp, option),
 	(2, latest_onchain_wallet_sync_timestamp, option),
 	(4, latest_fee_rate_cache_update_timestamp, option),
-	(6, latest_rgs_snapshot_timestamp, option),
+	// 6 used to be latest_rgs_snapshot_timestamp
+	(6, _legacy_latest_rgs_snapshot_timestamp, (legacy, u32, |_| Ok(()), |_: &NodeMetrics| None::<Option<u32>> )),
 	(8, latest_node_announcement_broadcast_timestamp, option),
 	// 10 used to be latest_channel_monitor_archival_height
 	(10, _legacy_latest_channel_monitor_archival_height, (legacy, u32, |_| Ok(()), |_: &NodeMetrics| None::<Option<u32>> )),
