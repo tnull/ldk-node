@@ -199,3 +199,122 @@ async fn sip_address_funding_and_refund() {
 
 	node.stop().unwrap();
 }
+
+/// End-to-end test: cooperative spend of SIP UTXOs (the primary swap path).
+///
+/// Validates that both the user and server can cooperatively sign a SIP UTXO and that
+/// Bitcoin Core accepts the resulting 2-of-2 multisig witness. This is the spending path
+/// used when swapping SIP funds into a Lightning channel.
+///
+/// FIXME: In production, the server's signature would be obtained via the `sip.cosign`
+/// protocol message exchange. This test passes the server's secret key directly.
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+async fn sip_cooperative_spend() {
+	let (bitcoind, electrsd) = setup_bitcoind_and_electrsd();
+	let bitcoind_client = &bitcoind.client;
+	let electrs_client = &electrsd.client;
+
+	premine_blocks(bitcoind_client, electrs_client).await;
+
+	// --- Setup ---
+	let secp = Secp256k1::new();
+	// FIXME: In production, the server's secret key must NEVER be available to the client.
+	// The client would only know the server's public key. This test uses the secret key
+	// directly to produce the cooperative signature that would normally come via sip.cosign.
+	let lsp_sk = SecretKey::from_slice(&[0x22; 32]).unwrap();
+	let lsp_pk = PublicKey::from_secret_key(&secp, &lsp_sk);
+	let lsp_addr = SocketAddress::TcpIpV4 { addr: [127, 0, 0, 1], port: 19736 };
+
+	let mut config = Config::default();
+	config.network = bitcoin::Network::Regtest;
+	config.storage_dir_path = random_storage_path().to_str().unwrap().to_string();
+
+	let esplora_url = format!("http://{}", electrsd.esplora_url.as_ref().unwrap());
+	let mut sync_config = EsploraSyncConfig::default();
+	sync_config.background_sync_config = None;
+
+	let mut builder = Builder::from_config(config);
+	builder.set_chain_source_esplora(esplora_url, Some(sync_config));
+	builder.set_log_facade_logger();
+	builder.set_sip_lsp(lsp_pk, lsp_addr, TEST_CSV_DELAY);
+
+	let mnemonic = generate_entropy_mnemonic(None);
+	let entropy = NodeEntropy::from_bip39_mnemonic(mnemonic, None);
+	let node = builder.build(entropy).unwrap();
+	node.start().unwrap();
+
+	// --- Step 1: Generate SIP address and fund it ---
+	let sip_address = node.sip_address().unwrap();
+	println!("SIP address for cooperative spend: {}", sip_address);
+
+	let deposit_amount = Amount::from_sat(200_000);
+	let amounts = json!({ sip_address.to_string(): deposit_amount.to_btc() });
+	let txid_str = bitcoind_client
+		.call::<Value>("sendmany", &[json!(""), amounts])
+		.unwrap()
+		.as_str()
+		.unwrap()
+		.to_string();
+	let txid: bitcoin::Txid = txid_str.parse().unwrap();
+	wait_for_tx(electrs_client, txid).await;
+
+	// --- Step 2: Discover, register, and confirm the UTXO ---
+	let funding_tx = electrs_client.transaction_get(&txid).unwrap();
+	let expected_spk = sip_address.script_pubkey();
+	let (vout, txout) = funding_tx
+		.output
+		.iter()
+		.enumerate()
+		.find(|(_, o)| o.script_pubkey == expected_spk)
+		.expect("Output matching SIP address");
+
+	let outpoint = OutPoint::new(txid, vout as u32);
+	node.register_sip_utxo(outpoint, txout.value, 0, funding_tx).unwrap();
+
+	generate_blocks_and_wait(bitcoind_client, electrs_client, 1).await;
+	let height = bitcoind_client.get_blockchain_info().unwrap().blocks as u32;
+	node.confirm_sip_utxo(&outpoint, height).unwrap();
+
+	// --- Step 3: Build cooperative spend transaction ---
+	let dest_addr = bitcoind_client.new_address().unwrap();
+	let (coop_tx, swept) = node
+		.build_sip_cooperative_spend(
+			dest_addr.script_pubkey(),
+			FeeRate::from_sat_per_vb(2).unwrap(),
+			&lsp_sk, // FIXME: Server key passed directly. In production, use sip.cosign.
+		)
+		.unwrap()
+		.expect("Should produce cooperative spend tx for confirmed UTXO");
+
+	assert_eq!(swept.len(), 1);
+	assert_eq!(swept[0], outpoint);
+	// Cooperative spend uses RBF-enabled sequence, NOT CSV.
+	assert_eq!(coop_tx.input[0].sequence, bitcoin::Sequence::ENABLE_RBF_NO_LOCKTIME);
+	// Witness should be the cooperative path (5 items: dummy, user_sig, server_sig, TRUE, script).
+	assert_eq!(coop_tx.input[0].witness.len(), 5);
+
+	println!("Cooperative spend tx: {}", coop_tx.compute_txid());
+
+	// --- Step 4: Broadcast and verify Bitcoin Core accepts it ---
+	let result = bitcoind_client.send_raw_transaction(&coop_tx);
+	assert!(
+		result.is_ok(),
+		"Bitcoin Core rejected cooperative spend tx: {:?}",
+		result.err()
+	);
+	let coop_txid: bitcoin::Txid = result.unwrap().0.parse().unwrap();
+	println!("Cooperative spend accepted by Bitcoin Core: txid={}", coop_txid);
+
+	// --- Step 5: Confirm on-chain ---
+	generate_blocks_and_wait(bitcoind_client, electrs_client, 1).await;
+	wait_for_tx(electrs_client, coop_txid).await;
+
+	let confirmed = electrs_client.transaction_get(&coop_txid).unwrap();
+	assert_eq!(confirmed.compute_txid(), coop_txid);
+
+	println!(
+		"SIP cooperative spend test passed: address → fund → confirm → coop spend → confirm"
+	);
+
+	node.stop().unwrap();
+}
