@@ -117,6 +117,18 @@ impl SipManager {
 		}
 	}
 
+	/// Returns the channel IDs of pending SIP fundings awaiting server signatures.
+	pub(crate) fn pending_funding_channel_ids(&self) -> Vec<ChannelId> {
+		self.pending_fundings.lock().unwrap().keys().cloned().collect()
+	}
+
+	/// Returns a clone of the pending funding for the given channel, without removing it.
+	pub(crate) fn peek_pending_funding(
+		&self, channel_id: &ChannelId,
+	) -> Option<PendingSipFunding> {
+		self.pending_fundings.lock().unwrap().get(channel_id).cloned()
+	}
+
 	/// Returns a reference to the SIP wallet.
 	pub(crate) fn wallet(&self) -> &SipWallet {
 		&self.wallet

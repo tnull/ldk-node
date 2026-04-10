@@ -25,22 +25,15 @@ use electrum_client::ElectrumApi;
 use lightning::ln::msgs::SocketAddress;
 use serde_json::{json, Value};
 
-use std::collections::HashMap;
-
 use ldk_node::config::{Config, EsploraSyncConfig};
 use ldk_node::entropy::{generate_entropy_mnemonic, NodeEntropy};
 use ldk_node::sip::state::SipUtxoState;
-use ldk_node::Builder;
-
-use lightning_liquidity::sip::address::build_sip_witness_script;
-
-use ldk_node::{Event, UserChannelId};
+use ldk_node::{Builder, Event};
 
 use common::{
 	expect_channel_pending_event, expect_channel_ready_event, generate_blocks_and_wait,
-	generate_listening_addresses, open_channel, premine_and_distribute_funds, premine_blocks,
-	random_config, random_storage_path, setup_bitcoind_and_electrsd, setup_node, wait_for_tx,
-	TestChainSource,
+	generate_listening_addresses, premine_and_distribute_funds, premine_blocks,
+	random_storage_path, setup_bitcoind_and_electrsd, wait_for_tx,
 };
 
 /// Short CSV delay for testing (10 blocks).
@@ -410,6 +403,7 @@ async fn sip_open_channel() {
 	);
 
 	let client_mnemonic = generate_entropy_mnemonic(None);
+	let client_node_mnemonic_seed: [u8; 64] = client_mnemonic.to_seed("");
 	let client_entropy = NodeEntropy::from_bip39_mnemonic(client_mnemonic, None);
 	let client_node = client_builder.build(client_entropy).unwrap();
 	client_node.start().unwrap();
@@ -468,34 +462,108 @@ async fn sip_open_channel() {
 		.unwrap();
 	println!("SIP channel open initiated: user_channel_id={}", user_channel_id);
 
-	// Wait for the FundingGenerationReady event to be processed.
+	// Wait for the FundingGenerationReady event to be processed and the funding tx stashed.
 	tokio::time::sleep(std::time::Duration::from_secs(3)).await;
 
 	// --- Step 3: Provide the server's cooperative SIP signatures ---
 	// The FundingGenerationReady handler constructed the funding tx from SIP UTXOs and
-	// stashed it. Now we provide the server's signatures (derived from the LSP's node key).
-	//
-	// Look up the pending funding by trying the temporary channel ID.
-	// Since channel IDs change, we check all channels.
+	// stashed it. Now we provide the server's signatures.
+	let pending_ids = client_node.pending_sip_funding_channel_ids().unwrap();
+	assert_eq!(pending_ids.len(), 1, "Should have exactly one pending SIP funding");
+	let channel_id = pending_ids[0];
+	println!("Pending SIP funding for channel: {}", channel_id);
+
+	// Get the unsigned funding tx and SIP inputs to compute the server's signatures.
+	let funding_tx = client_node.pending_sip_funding_tx(&channel_id).unwrap().unwrap();
+	let sip_inputs = client_node.pending_sip_funding_inputs(&channel_id).unwrap().unwrap();
+
+	// Compute the server's cooperative signatures for each SIP input.
+	// FIXME: In production, these signatures come from the LSP via the `sip.cosign`
+	// protocol message. The server's secret key must NEVER be on the client. This test
+	// derives the key from the LSP's mnemonic purely for testing.
+	let mut server_signatures = std::collections::HashMap::new();
+	for (input_idx, outpoint) in &sip_inputs {
+		// Look up the SIP UTXO to get the witness script and value.
+		let utxos = client_node.list_sip_utxos().unwrap();
+		let sip_utxo_info = utxos.iter().find(|u| u.outpoint == *outpoint).unwrap();
+
+		// We need the user pubkey for this address index. Since we only generated one
+		// address (index 0), and the server pubkey is the LSP's node_id:
+		let user_pubkey = {
+			// Re-derive: the SIP wallet derived user keys at m/787'/<index>
+			let xprv_master = Xpriv::new_master(
+				bitcoin::Network::Regtest,
+				&client_node_mnemonic_seed,
+			)
+			.unwrap();
+			let sip_xprv = xprv_master
+				.derive_priv(
+					&secp,
+					&[ChildNumber::from_hardened_idx(787).unwrap()],
+				)
+				.unwrap();
+			let user_child = sip_xprv
+				.derive_priv(&secp, &[ChildNumber::from_normal_idx(0).unwrap()])
+				.unwrap();
+			PublicKey::from_secret_key(&secp, &user_child.private_key)
+		};
+
+		let witness_script = lightning_liquidity::sip::address::build_sip_witness_script(
+			&user_pubkey,
+			&lsp_node.node_id(),
+			TEST_CSV_DELAY,
+		);
+
+		let sighash = bitcoin::sighash::SighashCache::new(&funding_tx)
+			.p2wsh_signature_hash(
+				*input_idx,
+				&witness_script,
+				sip_utxo_info.value,
+				bitcoin::EcdsaSighashType::All,
+			)
+			.expect("valid sighash");
+
+		let msg = bitcoin::secp256k1::Message::from_digest(
+			bitcoin::hashes::Hash::to_byte_array(sighash),
+		);
+		let server_sig = bitcoin::ecdsa::Signature {
+			signature: secp.sign_ecdsa(&msg, &lsp_node_secret),
+			sighash_type: bitcoin::EcdsaSighashType::All,
+		};
+
+		server_signatures.insert(*outpoint, server_sig);
+	}
+
+	// Complete the SIP funding with the server's signatures.
+	client_node
+		.complete_sip_funding(&channel_id, server_signatures)
+		.unwrap();
+	println!("SIP funding completed with server signatures");
+
+	// --- Step 4: Wait for channel to become pending/ready ---
+	let funding_txo = expect_channel_pending_event!(client_node, lsp_node.node_id());
+	let _funding_txo_lsp = expect_channel_pending_event!(lsp_node, client_node.node_id());
+	println!("Channel pending with funding txo: {:?}", funding_txo);
+
+	// Confirm the funding transaction.
+	wait_for_tx(electrs_client, funding_txo.txid).await;
+	generate_blocks_and_wait(bitcoind_client, electrs_client, 6).await;
+	client_node.sync_wallets().unwrap();
+	lsp_node.sync_wallets().unwrap();
+
+	expect_channel_ready_event!(client_node, lsp_node.node_id());
+	expect_channel_ready_event!(lsp_node, client_node.node_id());
+
+	// --- Step 5: Verify the channel is open with the SIP-funded balance ---
 	let channels = client_node.list_channels();
-	println!("Channels after open: {}", channels.len());
-
-	// The pending funding should be stashed under the temporary channel ID.
-	// For now, get the pending funding channel_id from the SIP manager's stash.
-	// In a real implementation, the application would receive an event with the channel_id.
-
-	// Try to complete the funding. The SIP manager has the stashed pending funding.
-	// We need the channel_id it was stashed under. Let's get it from the channel list
-	// or from the SIP manager directly.
-	//
-	// FIXME: In production, the application would receive a dedicated event
-	// (e.g., `Event::SipFundingReadyForCosigning`) with the channel_id and the
-	// transaction to sign. For the PoC, we peek at the stashed pending fundings.
+	assert_eq!(channels.len(), 1, "Should have one channel");
+	assert!(channels[0].is_usable, "Channel should be usable");
 	println!(
-		"SIP channel open test: open initiated, funding tx constructed from SIP UTXOs. \
-		Full completion with server co-signing will be validated once the sip.cosign \
-		protocol message exchange is implemented."
+		"SIP-funded channel is OPEN and USABLE! Outbound capacity: {} msat",
+		channels[0].outbound_capacity_msat
 	);
+
+	println!("SIP channel open test PASSED: SIP UTXO → channel funding → channel ready");
 
 	client_node.stop().unwrap();
 	lsp_node.stop().unwrap();

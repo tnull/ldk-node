@@ -2159,6 +2159,36 @@ impl Node {
 			})
 	}
 
+	/// Returns channel IDs of pending SIP fundings awaiting server cooperative signatures.
+	///
+	/// After `open_channel_from_sip()` is called and the `FundingGenerationReady` event is
+	/// processed, the funding transaction is stashed here until `complete_sip_funding()` is
+	/// called with the server's signatures.
+	pub fn pending_sip_funding_channel_ids(
+		&self,
+	) -> Result<Vec<lightning::ln::types::ChannelId>, Error> {
+		let sip = self.sip_manager.as_ref().ok_or(Error::LiquiditySourceUnavailable)?;
+		Ok(sip.pending_funding_channel_ids())
+	}
+
+	/// Returns the SIP input outpoints for a pending SIP funding, so the caller can
+	/// produce the server's cooperative signatures for each input.
+	pub fn pending_sip_funding_inputs(
+		&self, channel_id: &lightning::ln::types::ChannelId,
+	) -> Result<Option<Vec<(usize, OutPoint)>>, Error> {
+		let sip = self.sip_manager.as_ref().ok_or(Error::LiquiditySourceUnavailable)?;
+		Ok(sip.peek_pending_funding(channel_id).map(|p| p.sip_inputs))
+	}
+
+	/// Returns the unsigned funding transaction for a pending SIP funding, so the caller
+	/// can compute sighashes and produce the server's cooperative signatures.
+	pub fn pending_sip_funding_tx(
+		&self, channel_id: &lightning::ln::types::ChannelId,
+	) -> Result<Option<Transaction>, Error> {
+		let sip = self.sip_manager.as_ref().ok_or(Error::LiquiditySourceUnavailable)?;
+		Ok(sip.peek_pending_funding(channel_id).map(|p| p.tx))
+	}
+
 	/// Completes a pending SIP-funded channel open or splice by providing the server's
 	/// cooperative signatures for the SIP inputs.
 	///
