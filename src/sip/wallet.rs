@@ -31,7 +31,7 @@ const SIP_HARDENED_CHILD_INDEX: u32 = 787;
 
 /// Information about a generated SIP address.
 #[derive(Debug, Clone)]
-pub(crate) struct SipAddressInfo {
+pub struct SipAddressInfo {
 	/// The BIP32 derivation index.
 	pub index: u32,
 	/// The derived user public key.
@@ -45,7 +45,7 @@ pub(crate) struct SipAddressInfo {
 /// Key derivation uses BIP32: user keys are derived at `m/787'/<index>` from the node's
 /// master key. The server (LSP) public key and CSV delay are obtained during the initial
 /// SIP protocol exchange and remain fixed for the lifetime of the wallet.
-pub(crate) struct SipWallet {
+pub struct SipWallet {
 	/// BIP32 extended private key for deriving user keys.
 	user_xpriv: Xpriv,
 	/// The server (LSP) public key used in all SIP addresses.
@@ -68,7 +68,7 @@ impl SipWallet {
 	///
 	/// The `master_xpriv` should be the node's master extended private key. SIP user keys are
 	/// derived from it at `m/787'/<index>`.
-	pub(crate) fn new(
+	pub fn new(
 		master_xpriv: Xpriv, server_pubkey: PublicKey, csv_delay: u16, network: Network,
 		logger: Arc<Logger>,
 	) -> Self {
@@ -103,25 +103,25 @@ impl SipWallet {
 	}
 
 	/// Derives the user public key for the given address index.
-	pub(crate) fn derive_user_pubkey(&self, index: u32) -> PublicKey {
+	pub fn derive_user_pubkey(&self, index: u32) -> PublicKey {
 		let secp = Secp256k1::new();
 		PublicKey::from_secret_key(&secp, &self.derive_user_secret_key(index))
 	}
 
 	/// Returns the server (LSP) public key.
-	pub(crate) fn server_pubkey(&self) -> PublicKey {
+	pub fn server_pubkey(&self) -> PublicKey {
 		self.server_pubkey
 	}
 
 	/// Returns the CSV delay in blocks.
-	pub(crate) fn csv_delay(&self) -> u16 {
+	pub fn csv_delay(&self) -> u16 {
 		self.csv_delay
 	}
 
 	/// Generates a new SIP deposit address.
 	///
 	/// Each call increments the internal derivation index, producing a unique address.
-	pub(crate) fn new_address(&self) -> SipAddressInfo {
+	pub fn new_address(&self) -> SipAddressInfo {
 		let index = self.next_index.fetch_add(1, Ordering::Relaxed);
 		let user_pk = self.derive_user_pubkey(index);
 		let witness_script =
@@ -138,7 +138,7 @@ impl SipWallet {
 
 	/// Returns the satisfaction weight for cooperative spends from SIP addresses managed by this
 	/// wallet. This is constant for all addresses since they share the same script structure.
-	pub(crate) fn cooperative_satisfaction_weight(&self) -> bitcoin::Weight {
+	pub fn cooperative_satisfaction_weight(&self) -> bitcoin::Weight {
 		// Use index 0 as representative -- all SIP addresses have the same script structure
 		// and thus the same satisfaction weight.
 		let user_pk = self.derive_user_pubkey(0);
@@ -151,7 +151,7 @@ impl SipWallet {
 	///
 	/// The chain source should watch these for incoming transactions. This returns the
 	/// P2WSH scriptPubKey for each generated SIP address.
-	pub(crate) fn script_pubkeys_to_watch(&self) -> Vec<bitcoin::ScriptBuf> {
+	pub fn script_pubkeys_to_watch(&self) -> Vec<bitcoin::ScriptBuf> {
 		let addresses = self.addresses.lock().unwrap();
 		addresses
 			.values()
@@ -169,7 +169,7 @@ impl SipWallet {
 	/// Registers a newly discovered UTXO at a SIP address.
 	///
 	/// Called when the chain source discovers a deposit to one of our SIP addresses.
-	pub(crate) fn register_utxo(
+	pub fn register_utxo(
 		&self, outpoint: OutPoint, value: Amount, address_index: u32, prevtx: Transaction,
 	) {
 		let user_pk = self.derive_user_pubkey(address_index);
@@ -197,7 +197,7 @@ impl SipWallet {
 	}
 
 	/// Updates a UTXO's state to confirmed.
-	pub(crate) fn confirm_utxo(&self, outpoint: &OutPoint, confirmed_at_height: u32) {
+	pub fn confirm_utxo(&self, outpoint: &OutPoint, confirmed_at_height: u32) {
 		let mut utxos = self.utxos.lock().unwrap();
 		if let Some(utxo) = utxos.get_mut(outpoint) {
 			if matches!(utxo.state, SipUtxoState::Unconfirmed) {
@@ -215,7 +215,7 @@ impl SipWallet {
 	/// Updates UTXO states based on the current chain tip height.
 	///
 	/// Transitions confirmed UTXOs to `CsvExpired` when the relative timelock has elapsed.
-	pub(crate) fn update_csv_expiry(&self, current_height: u32) {
+	pub fn update_csv_expiry(&self, current_height: u32) {
 		let mut utxos = self.utxos.lock().unwrap();
 		for utxo in utxos.values_mut() {
 			if utxo.csv_expired(current_height)
@@ -233,32 +233,32 @@ impl SipWallet {
 	}
 
 	/// Returns all tracked SIP UTXOs that are confirmed and eligible for swapping.
-	pub(crate) fn swappable_utxos(&self) -> Vec<SipUtxo> {
+	pub fn swappable_utxos(&self) -> Vec<SipUtxo> {
 		self.utxos.lock().unwrap().values().filter(|u| u.is_swappable()).cloned().collect()
 	}
 
 	/// Returns all tracked SIP UTXOs whose CSV has expired and are eligible for refund.
-	pub(crate) fn refundable_utxos(&self) -> Vec<SipUtxo> {
+	pub fn refundable_utxos(&self) -> Vec<SipUtxo> {
 		self.utxos.lock().unwrap().values().filter(|u| u.is_refundable()).cloned().collect()
 	}
 
 	/// Returns information about all tracked SIP UTXOs for the public API.
-	pub(crate) fn list_utxos(&self) -> Vec<SipUtxoInfo> {
+	pub fn list_utxos(&self) -> Vec<SipUtxoInfo> {
 		self.utxos.lock().unwrap().values().map(SipUtxoInfo::from).collect()
 	}
 
 	/// Returns the total balance across all non-terminal SIP UTXOs.
-	pub(crate) fn total_balance(&self) -> Amount {
+	pub fn total_balance(&self) -> Amount {
 		self.utxos.lock().unwrap().values().filter(|u| !u.is_terminal()).map(|u| u.value).sum()
 	}
 
 	/// Returns the balance of confirmed, swappable SIP UTXOs.
-	pub(crate) fn spendable_balance(&self) -> Amount {
+	pub fn spendable_balance(&self) -> Amount {
 		self.utxos.lock().unwrap().values().filter(|u| u.is_swappable()).map(|u| u.value).sum()
 	}
 
 	/// Returns the balance of unconfirmed SIP UTXOs.
-	pub(crate) fn pending_balance(&self) -> Amount {
+	pub fn pending_balance(&self) -> Amount {
 		self.utxos
 			.lock()
 			.unwrap()
@@ -271,18 +271,18 @@ impl SipWallet {
 	/// Returns the user secret key for signing a cooperative or refund spend.
 	///
 	/// This is used by the SIP protocol handlers when constructing spending transactions.
-	pub(crate) fn signing_key(&self, address_index: u32) -> SecretKey {
+	pub fn signing_key(&self, address_index: u32) -> SecretKey {
 		self.derive_user_secret_key(address_index)
 	}
 
 	/// Looks up the address index for a given SIP address, if it was generated by this wallet.
-	pub(crate) fn address_index_for(&self, address: &Address) -> Option<u32> {
+	pub fn address_index_for(&self, address: &Address) -> Option<u32> {
 		let addresses = self.addresses.lock().unwrap();
 		addresses.iter().find(|(_, info)| &info.address == address).map(|(index, _)| *index)
 	}
 
 	/// Marks a UTXO as swap-initiated.
-	pub(crate) fn mark_swap_initiated(
+	pub fn mark_swap_initiated(
 		&self, outpoint: &OutPoint, channel_id: lightning::ln::types::ChannelId,
 	) {
 		let mut utxos = self.utxos.lock().unwrap();
@@ -301,7 +301,7 @@ impl SipWallet {
 	}
 
 	/// Marks a UTXO as swapped (terminal state).
-	pub(crate) fn mark_swapped(
+	pub fn mark_swapped(
 		&self, outpoint: &OutPoint, channel_id: lightning::ln::types::ChannelId,
 	) {
 		let mut utxos = self.utxos.lock().unwrap();
@@ -312,7 +312,7 @@ impl SipWallet {
 	}
 
 	/// Marks a UTXO as refunded (terminal state).
-	pub(crate) fn mark_refunded(&self, outpoint: &OutPoint, spending_txid: Txid) {
+	pub fn mark_refunded(&self, outpoint: &OutPoint, spending_txid: Txid) {
 		let mut utxos = self.utxos.lock().unwrap();
 		if let Some(utxo) = utxos.get_mut(outpoint) {
 			log_info!(self.logger, "SIP UTXO {} refunded via {}", outpoint, spending_txid);
@@ -324,7 +324,7 @@ impl SipWallet {
 	///
 	/// Returns the signed transaction and the outpoints being swept, or `None` if no UTXOs are
 	/// eligible for refund.
-	pub(crate) fn build_refund_transaction(
+	pub fn build_refund_transaction(
 		&self, destination: bitcoin::ScriptBuf, fee_rate: FeeRate,
 	) -> Option<(Transaction, Vec<OutPoint>)> {
 		let secp = Secp256k1::new();

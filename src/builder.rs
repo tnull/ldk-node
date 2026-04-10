@@ -512,15 +512,19 @@ impl NodeBuilder {
 	/// Configures the [`Node`] instance to use swap-in-potentiam with the given LSP.
 	///
 	/// SIP allows the node to receive on-chain funds at a shared address and instantly swap them
-	/// into a Lightning channel. The LSP at `node_id` must support the SIP protocol.
+	/// into a Lightning channel. The LSP's node ID is used as the server public key for SIP
+	/// address construction, following the original protocol design.
+	///
+	/// The `csv_delay` is the relative timelock (in blocks) for the refund spending path.
 	pub fn set_sip_lsp(
-		&mut self, node_id: PublicKey, address: SocketAddress,
+		&mut self, node_id: PublicKey, address: SocketAddress, csv_delay: u16,
 	) -> &mut Self {
 		self.config.trusted_peers_0conf.push(node_id.clone());
 
 		let liquidity_source_config =
 			self.liquidity_source_config.get_or_insert(LiquiditySourceConfig::default());
-		liquidity_source_config.sip_client = Some(SIPClientConfig { node_id, address });
+		liquidity_source_config.sip_client =
+			Some(SIPClientConfig { node_id, address, csv_delay });
 		self
 	}
 
@@ -1868,7 +1872,7 @@ fn build_with_store_internal(
 			});
 
 			lsc.sip_client.as_ref().map(|config| {
-				liquidity_source_builder.sip_client(config.node_id, config.address.clone())
+				liquidity_source_builder.sip_client(config.node_id, config.address.clone(), config.csv_delay)
 			});
 
 			lsc.sip_service.as_ref().map(|config| {
@@ -2016,6 +2020,19 @@ fn build_with_store_internal(
 		_leak_checker.0.push(Arc::downgrade(&wallet) as Weak<dyn Any + Send + Sync>);
 	}
 
+	let sip_manager = liquidity_source_config
+		.as_ref()
+		.and_then(|lsc| lsc.sip_client.as_ref())
+		.map(|sip_config| {
+			Arc::new(crate::sip::SipManager::new(
+				xprv,
+				sip_config.node_id,
+				sip_config.csv_delay,
+				config.network,
+				Arc::clone(&logger),
+			))
+		});
+
 	Ok(Node {
 		runtime,
 		stop_sender,
@@ -2037,7 +2054,7 @@ fn build_with_store_internal(
 		gossip_source,
 		pathfinding_scores_sync_url,
 		liquidity_source,
-		sip_manager: None,
+		sip_manager,
 		kv_store,
 		logger,
 		_router: router,

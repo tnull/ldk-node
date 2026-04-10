@@ -122,7 +122,7 @@ use bitcoin::secp256k1::PublicKey;
 pub use bitcoin::FeeRate;
 #[cfg(not(feature = "uniffi"))]
 use bitcoin::FeeRate;
-use bitcoin::{Address, Amount};
+use bitcoin::{Address, Amount, OutPoint, ScriptBuf, Transaction, Txid};
 #[cfg(feature = "uniffi")]
 pub use builder::ArcedNodeBuilder as Builder;
 pub use builder::BuildError;
@@ -1957,6 +1957,57 @@ impl Node {
 	pub fn list_sip_utxos(&self) -> Result<Vec<sip::state::SipUtxoInfo>, Error> {
 		let sip = self.sip_manager.as_ref().ok_or(Error::LiquiditySourceUnavailable)?;
 		Ok(sip.list_utxos())
+	}
+
+	/// Registers a newly discovered SIP UTXO.
+	///
+	/// Call this when a deposit to a SIP address is detected on-chain. In production this
+	/// would be driven by chain sync; for testing it can be called manually.
+	pub fn register_sip_utxo(
+		&self, outpoint: OutPoint, value: Amount, address_index: u32,
+		prevtx: Transaction,
+	) -> Result<(), Error> {
+		let sip = self.sip_manager.as_ref().ok_or(Error::LiquiditySourceUnavailable)?;
+		sip.wallet().register_utxo(outpoint, value, address_index, prevtx);
+		Ok(())
+	}
+
+	/// Marks a SIP UTXO as confirmed at the given block height.
+	pub fn confirm_sip_utxo(
+		&self, outpoint: &OutPoint, confirmed_at_height: u32,
+	) -> Result<(), Error> {
+		let sip = self.sip_manager.as_ref().ok_or(Error::LiquiditySourceUnavailable)?;
+		sip.wallet().confirm_utxo(outpoint, confirmed_at_height);
+		Ok(())
+	}
+
+	/// Updates SIP UTXO states based on the current chain tip, transitioning confirmed UTXOs
+	/// to expired once their CSV timelock has elapsed.
+	pub fn update_sip_on_new_block(&self, current_height: u32) -> Result<(), Error> {
+		let sip = self.sip_manager.as_ref().ok_or(Error::LiquiditySourceUnavailable)?;
+		sip.update_on_new_block(current_height);
+		Ok(())
+	}
+
+	/// Builds a signed refund transaction sweeping all CSV-expired SIP UTXOs to the given
+	/// destination.
+	///
+	/// Returns the signed transaction and the swept outpoints, or `None` if no UTXOs are
+	/// eligible for refund. The caller is responsible for broadcasting the transaction.
+	pub fn build_sip_refund_transaction(
+		&self, destination: ScriptBuf, fee_rate: FeeRate,
+	) -> Result<Option<(Transaction, Vec<OutPoint>)>, Error> {
+		let sip = self.sip_manager.as_ref().ok_or(Error::LiquiditySourceUnavailable)?;
+		Ok(sip.wallet().build_refund_transaction(destination, fee_rate))
+	}
+
+	/// Marks a SIP UTXO as refunded after the refund transaction has been broadcast.
+	pub fn mark_sip_refunded(
+		&self, outpoint: &OutPoint, spending_txid: Txid,
+	) -> Result<(), Error> {
+		let sip = self.sip_manager.as_ref().ok_or(Error::LiquiditySourceUnavailable)?;
+		sip.wallet().mark_refunded(outpoint, spending_txid);
+		Ok(())
 	}
 
 	/// Retrieves all payments that match the given predicate.

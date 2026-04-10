@@ -1,0 +1,201 @@
+// This file is Copyright its original authors, visible in version control history.
+//
+// This file is licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
+// http://www.apache.org/licenses/LICENSE-2.0> or the MIT license <LICENSE-MIT or
+// http://opensource.org/licenses/MIT>, at your option. You may not use this file except in
+// accordance with one or both of these licenses.
+
+//! End-to-end integration test for swap-in-potentiam on regtest.
+//!
+//! Validates the full SIP lifecycle through the public Node API:
+//! 1. Configure a node with SIP via the Builder
+//! 2. Generate a SIP deposit address
+//! 3. Fund it via bitcoind
+//! 4. Register and confirm the UTXO
+//! 5. Advance past CSV expiry
+//! 6. Build and broadcast the refund transaction
+//! 7. Verify the refund is accepted by Bitcoin Core and confirms on-chain
+
+mod common;
+
+use bitcoin::secp256k1::{PublicKey, Secp256k1, SecretKey};
+use bitcoin::{Amount, FeeRate, OutPoint};
+use electrum_client::ElectrumApi;
+use lightning::ln::msgs::SocketAddress;
+use serde_json::{json, Value};
+
+use ldk_node::config::{Config, EsploraSyncConfig};
+use ldk_node::entropy::{generate_entropy_mnemonic, NodeEntropy};
+use ldk_node::sip::state::SipUtxoState;
+use ldk_node::Builder;
+
+use common::{
+	generate_blocks_and_wait, premine_blocks, random_storage_path, setup_bitcoind_and_electrsd,
+	wait_for_tx,
+};
+
+/// Short CSV delay for testing (10 blocks).
+const TEST_CSV_DELAY: u16 = 10;
+
+/// End-to-end test: generate SIP address → fund on-chain → track UTXO → expire CSV → refund.
+///
+/// This validates the complete SIP lifecycle through the public Node API and proves the P2WSH
+/// scripts are valid by having Bitcoin Core accept the signed refund transaction.
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+async fn sip_address_funding_and_refund() {
+	let (bitcoind, electrsd) = setup_bitcoind_and_electrsd();
+	let bitcoind_client = &bitcoind.client;
+	let electrs_client = &electrsd.client;
+
+	premine_blocks(bitcoind_client, electrs_client).await;
+
+	// --- Setup: Build a node with SIP configured ---
+	let secp = Secp256k1::new();
+	// Use a dummy LSP key -- we're testing the wallet/refund flow, not the protocol exchange.
+	let lsp_sk = SecretKey::from_slice(&[0x22; 32]).unwrap();
+	let lsp_pk = PublicKey::from_secret_key(&secp, &lsp_sk);
+	let lsp_addr = SocketAddress::TcpIpV4 { addr: [127, 0, 0, 1], port: 19735 };
+
+	let mut config = Config::default();
+	config.network = bitcoin::Network::Regtest;
+	config.storage_dir_path = random_storage_path().to_str().unwrap().to_string();
+
+	let esplora_url = format!("http://{}", electrsd.esplora_url.as_ref().unwrap());
+	let mut sync_config = EsploraSyncConfig::default();
+	sync_config.background_sync_config = None;
+
+	let mut builder = Builder::from_config(config);
+	builder.set_chain_source_esplora(esplora_url, Some(sync_config));
+	builder.set_log_facade_logger();
+	builder.set_sip_lsp(lsp_pk, lsp_addr, TEST_CSV_DELAY);
+
+	let mnemonic = generate_entropy_mnemonic(None);
+	let entropy = NodeEntropy::from_bip39_mnemonic(mnemonic, None);
+	let node = builder.build(entropy).unwrap();
+	node.start().unwrap();
+
+	// --- Step 1: Generate SIP address ---
+	let sip_address = node.sip_address().expect("SIP should be configured");
+	println!("SIP address: {}", sip_address);
+
+	// Verify it looks like a P2WSH regtest address.
+	assert!(sip_address.to_string().starts_with("bcrt1"));
+
+	// --- Step 2: Fund the SIP address via bitcoind ---
+	let deposit_amount = Amount::from_sat(100_000);
+	let amounts = json!({ sip_address.to_string(): deposit_amount.to_btc() });
+	let txid_str = bitcoind_client
+		.call::<Value>("sendmany", &[json!(""), amounts])
+		.unwrap()
+		.as_str()
+		.unwrap()
+		.to_string();
+	let txid: bitcoin::Txid = txid_str.parse().unwrap();
+	println!("Funded SIP address: txid={}", txid);
+
+	wait_for_tx(electrs_client, txid).await;
+
+	// --- Step 3: Discover and register the UTXO ---
+	let funding_tx = electrs_client.transaction_get(&txid).unwrap();
+
+	// Find the output matching our SIP address by reconstructing the expected scriptPubKey.
+	// We need the user pubkey, which we get by listing UTXOs (empty so far) and using
+	// the address index (0 for the first address).
+	let utxos_before = node.list_sip_utxos().unwrap();
+	assert!(utxos_before.is_empty());
+
+	// Reconstruct expected script_pubkey: we know address_index=0, server_key=lsp_pk.
+	// The node derived a user key internally. We can find the right output by matching
+	// the address's script_pubkey.
+	let expected_spk = sip_address.script_pubkey();
+	let (vout, txout) = funding_tx
+		.output
+		.iter()
+		.enumerate()
+		.find(|(_, o)| o.script_pubkey == expected_spk)
+		.expect("Funding tx should have output matching SIP address");
+
+	let outpoint = OutPoint::new(txid, vout as u32);
+	println!("Found SIP UTXO: {}:{} ({} sats)", txid, vout, txout.value);
+
+	// Register via public API.
+	node.register_sip_utxo(outpoint, txout.value, 0, funding_tx).unwrap();
+
+	// Verify it's tracked as unconfirmed.
+	let utxos = node.list_sip_utxos().unwrap();
+	assert_eq!(utxos.len(), 1);
+	assert!(matches!(utxos[0].state, SipUtxoState::Unconfirmed));
+
+	// --- Step 4: Confirm ---
+	generate_blocks_and_wait(bitcoind_client, electrs_client, 1).await;
+	let height = bitcoind_client.get_blockchain_info().unwrap().blocks as u32;
+	node.confirm_sip_utxo(&outpoint, height).unwrap();
+
+	let utxos = node.list_sip_utxos().unwrap();
+	assert!(matches!(utxos[0].state, SipUtxoState::Confirmed { .. }));
+
+	// --- Step 5: CSV not yet expired ---
+	node.update_sip_on_new_block(height + 5).unwrap();
+	// Still confirmed, not expired.
+	let utxos = node.list_sip_utxos().unwrap();
+	assert!(matches!(utxos[0].state, SipUtxoState::Confirmed { .. }));
+
+	// No refund possible yet.
+	let refund = node
+		.build_sip_refund_transaction(
+			expected_spk.clone(),
+			FeeRate::from_sat_per_vb(2).unwrap(),
+		)
+		.unwrap();
+	assert!(refund.is_none());
+
+	// --- Step 6: Advance past CSV expiry ---
+	generate_blocks_and_wait(bitcoind_client, electrs_client, TEST_CSV_DELAY as usize + 1).await;
+	let height = bitcoind_client.get_blockchain_info().unwrap().blocks as u32;
+	node.update_sip_on_new_block(height).unwrap();
+
+	let utxos = node.list_sip_utxos().unwrap();
+	assert!(matches!(utxos[0].state, SipUtxoState::CsvExpired));
+
+	// --- Step 7: Build and broadcast refund ---
+	let refund_addr = bitcoind_client.new_address().unwrap();
+	let (refund_tx, swept) = node
+		.build_sip_refund_transaction(refund_addr.script_pubkey(), FeeRate::from_sat_per_vb(2).unwrap())
+		.unwrap()
+		.expect("Should produce refund tx for expired UTXO");
+
+	assert_eq!(swept.len(), 1);
+	assert_eq!(swept[0], outpoint);
+	assert_eq!(
+		refund_tx.input[0].sequence,
+		bitcoin::Sequence::from_consensus(TEST_CSV_DELAY as u32)
+	);
+	// Witness should be the refund path (3 items: user_sig, FALSE, witness_script).
+	assert_eq!(refund_tx.input[0].witness.len(), 3);
+
+	println!("Broadcasting refund tx: {}", refund_tx.compute_txid());
+
+	// Broadcast via bitcoind -- this is the critical validation that the script is correct.
+	let result = bitcoind_client.send_raw_transaction(&refund_tx);
+	assert!(result.is_ok(), "Bitcoin Core rejected refund tx: {:?}", result.err());
+	let refund_txid: bitcoin::Txid = result.unwrap().0.parse().unwrap();
+	println!("Refund accepted by Bitcoin Core: txid={}", refund_txid);
+
+	// Mark refunded via public API.
+	node.mark_sip_refunded(&outpoint, refund_txid).unwrap();
+
+	// --- Step 8: Confirm refund on-chain ---
+	generate_blocks_and_wait(bitcoind_client, electrs_client, 1).await;
+	wait_for_tx(electrs_client, refund_txid).await;
+
+	let utxos = node.list_sip_utxos().unwrap();
+	assert_eq!(utxos.len(), 1);
+	assert!(matches!(
+		utxos[0].state,
+		SipUtxoState::Refunded { spending_txid } if spending_txid == refund_txid
+	));
+
+	println!("SIP end-to-end test passed: address → fund → confirm → expire → refund → confirm");
+
+	node.stop().unwrap();
+}

@@ -152,10 +152,13 @@ pub struct LSPS2ServiceConfig {
 }
 
 /// Client-side configuration for connecting to an LSP's SIP service.
+///
+/// The LSP's `node_id` doubles as the server public key for SIP address construction.
 #[derive(Debug, Clone)]
 pub(crate) struct SIPClientConfig {
 	pub node_id: PublicKey,
 	pub address: SocketAddress,
+	pub csv_delay: u16,
 }
 
 /// Service-side configuration for offering a SIP service.
@@ -261,9 +264,10 @@ where
 	}
 
 	pub(crate) fn sip_client(
-		&mut self, lsp_node_id: PublicKey, lsp_address: SocketAddress,
+		&mut self, lsp_node_id: PublicKey, lsp_address: SocketAddress, csv_delay: u16,
 	) -> &mut Self {
-		self.sip_client = Some(SIPClientConfig { node_id: lsp_node_id, address: lsp_address });
+		self.sip_client =
+			Some(SIPClientConfig { node_id: lsp_node_id, address: lsp_address, csv_delay });
 		self
 	}
 
