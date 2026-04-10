@@ -67,6 +67,7 @@ use crate::io::{
 };
 use crate::liquidity::{
 	LSPS1ClientConfig, LSPS2ClientConfig, LSPS2ServiceConfig, LiquiditySourceBuilder,
+	SIPClientConfig, SIPServiceBuilderConfig,
 };
 use crate::lnurl_auth::LnurlAuth;
 use crate::logger::{log_error, LdkLogger, LogLevel, LogWriter, Logger};
@@ -118,7 +119,7 @@ struct PathfindingScoresSyncConfig {
 	url: String,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 struct LiquiditySourceConfig {
 	// Act as an LSPS1 client connecting to the given service.
 	lsps1_client: Option<LSPS1ClientConfig>,
@@ -126,6 +127,22 @@ struct LiquiditySourceConfig {
 	lsps2_client: Option<LSPS2ClientConfig>,
 	// Act as an LSPS2 service.
 	lsps2_service: Option<LSPS2ServiceConfig>,
+	// Act as a SIP client connecting to the given LSP.
+	sip_client: Option<SIPClientConfig>,
+	// Act as a SIP service (LSP).
+	sip_service: Option<SIPServiceBuilderConfig>,
+}
+
+impl Default for LiquiditySourceConfig {
+	fn default() -> Self {
+		Self {
+			lsps1_client: None,
+			lsps2_client: None,
+			lsps2_service: None,
+			sip_client: None,
+			sip_service: None,
+		}
+	}
 }
 
 #[derive(Clone)]
@@ -489,6 +506,21 @@ impl NodeBuilder {
 		let liquidity_source_config =
 			self.liquidity_source_config.get_or_insert(LiquiditySourceConfig::default());
 		liquidity_source_config.lsps2_service = Some(service_config);
+		self
+	}
+
+	/// Configures the [`Node`] instance to use swap-in-potentiam with the given LSP.
+	///
+	/// SIP allows the node to receive on-chain funds at a shared address and instantly swap them
+	/// into a Lightning channel. The LSP at `node_id` must support the SIP protocol.
+	pub fn set_sip_lsp(
+		&mut self, node_id: PublicKey, address: SocketAddress,
+	) -> &mut Self {
+		self.config.trusted_peers_0conf.push(node_id.clone());
+
+		let liquidity_source_config =
+			self.liquidity_source_config.get_or_insert(LiquiditySourceConfig::default());
+		liquidity_source_config.sip_client = Some(SIPClientConfig { node_id, address });
 		self
 	}
 
@@ -1833,6 +1865,21 @@ fn build_with_store_internal(
 			};
 			lsc.lsps2_service.as_ref().map(|config| {
 				liquidity_source_builder.lsps2_service(promise_secret, config.clone())
+			});
+
+			lsc.sip_client.as_ref().map(|config| {
+				liquidity_source_builder.sip_client(config.node_id, config.address.clone())
+			});
+
+			lsc.sip_service.as_ref().map(|config| {
+				let ldk_config = lightning_liquidity::sip::service::SIPServiceConfig {
+					server_pubkey: config.server_pubkey,
+					csv_delay: config.csv_delay,
+					min_swap_amount_sat: config.min_swap_amount_sat,
+					max_swap_amount_sat: config.max_swap_amount_sat,
+					min_confirmations: config.min_confirmations,
+				};
+				liquidity_source_builder.sip_service(ldk_config)
 			});
 
 			let liquidity_source = runtime

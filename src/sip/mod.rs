@@ -13,8 +13,10 @@
 //! and transaction building for refund and cooperative spends.
 
 pub(crate) mod coin_selection;
-pub(crate) mod state;
-pub(crate) mod wallet;
+/// UTXO state machine for swap-in-potentiam.
+pub mod state;
+/// SIP wallet with BIP32 key derivation and UTXO tracking.
+pub mod wallet;
 
 use std::sync::Arc;
 

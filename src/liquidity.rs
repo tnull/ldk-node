@@ -34,6 +34,9 @@ use lightning_liquidity::lsps2::event::{LSPS2ClientEvent, LSPS2ServiceEvent};
 use lightning_liquidity::lsps2::msgs::{LSPS2OpeningFeeParams, LSPS2RawOpeningFeeParams};
 use lightning_liquidity::lsps2::service::LSPS2ServiceConfig as LdkLSPS2ServiceConfig;
 use lightning_liquidity::lsps2::utils::compute_opening_fee;
+use lightning_liquidity::sip::client::SIPClientConfig as LdkSIPClientConfig;
+use lightning_liquidity::sip::event::{SIPClientEvent, SIPServiceEvent};
+use lightning_liquidity::sip::service::SIPServiceConfig as LdkSIPServiceConfig;
 use lightning_liquidity::{LiquidityClientConfig, LiquidityServiceConfig};
 use lightning_types::payment::PaymentHash;
 use tokio::sync::oneshot;
@@ -148,6 +151,23 @@ pub struct LSPS2ServiceConfig {
 	pub allow_client_0reserve: bool,
 }
 
+/// Client-side configuration for connecting to an LSP's SIP service.
+#[derive(Debug, Clone)]
+pub(crate) struct SIPClientConfig {
+	pub node_id: PublicKey,
+	pub address: SocketAddress,
+}
+
+/// Service-side configuration for offering a SIP service.
+#[derive(Debug, Clone)]
+pub(crate) struct SIPServiceBuilderConfig {
+	pub server_pubkey: PublicKey,
+	pub csv_delay: u16,
+	pub min_swap_amount_sat: u64,
+	pub max_swap_amount_sat: u64,
+	pub min_confirmations: u16,
+}
+
 pub(crate) struct LiquiditySourceBuilder<L: Deref>
 where
 	L::Target: LdkLogger,
@@ -155,6 +175,8 @@ where
 	lsps1_client: Option<LSPS1Client>,
 	lsps2_client: Option<LSPS2Client>,
 	lsps2_service: Option<LSPS2Service>,
+	sip_client: Option<SIPClientConfig>,
+	sip_service_config: Option<LdkSIPServiceConfig>,
 	wallet: Arc<Wallet>,
 	channel_manager: Arc<ChannelManager>,
 	keys_manager: Arc<KeysManager>,
@@ -175,10 +197,14 @@ where
 		let lsps1_client = None;
 		let lsps2_client = None;
 		let lsps2_service = None;
+		let sip_client = None;
+		let sip_service_config = None;
 		Self {
 			lsps1_client,
 			lsps2_client,
 			lsps2_service,
+			sip_client,
+			sip_service_config,
 			wallet,
 			channel_manager,
 			keys_manager,
@@ -234,6 +260,18 @@ where
 		self
 	}
 
+	pub(crate) fn sip_client(
+		&mut self, lsp_node_id: PublicKey, lsp_address: SocketAddress,
+	) -> &mut Self {
+		self.sip_client = Some(SIPClientConfig { node_id: lsp_node_id, address: lsp_address });
+		self
+	}
+
+	pub(crate) fn sip_service(&mut self, config: LdkSIPServiceConfig) -> &mut Self {
+		self.sip_service_config = Some(config);
+		self
+	}
+
 	pub(crate) async fn build(self) -> Result<LiquiditySource<L>, BuildError> {
 		let liquidity_service_config = self.lsps2_service.as_ref().map(|s| {
 			let lsps2_service_config = Some(s.ldk_service_config.clone());
@@ -243,7 +281,7 @@ where
 				lsps1_service_config: None,
 				lsps2_service_config,
 				lsps5_service_config,
-				sip_service_config: None,
+				sip_service_config: self.sip_service_config.clone(),
 				advertise_service,
 			}
 		});
@@ -251,11 +289,13 @@ where
 		let lsps1_client_config = self.lsps1_client.as_ref().map(|s| s.ldk_client_config.clone());
 		let lsps2_client_config = self.lsps2_client.as_ref().map(|s| s.ldk_client_config.clone());
 		let lsps5_client_config = None;
+		let sip_client_config =
+			self.sip_client.as_ref().map(|_| LdkSIPClientConfig {});
 		let liquidity_client_config = Some(LiquidityClientConfig {
 			lsps1_client_config,
 			lsps2_client_config,
 			lsps5_client_config,
-			sip_client_config: None,
+			sip_client_config,
 		});
 
 		let liquidity_manager = Arc::new(
@@ -276,6 +316,7 @@ where
 			lsps1_client: self.lsps1_client,
 			lsps2_client: self.lsps2_client,
 			lsps2_service: self.lsps2_service,
+			sip_client: self.sip_client,
 			wallet: self.wallet,
 			channel_manager: self.channel_manager,
 			peer_manager: RwLock::new(None),
@@ -294,6 +335,7 @@ where
 	lsps1_client: Option<LSPS1Client>,
 	lsps2_client: Option<LSPS2Client>,
 	lsps2_service: Option<LSPS2Service>,
+	sip_client: Option<SIPClientConfig>,
 	wallet: Arc<Wallet>,
 	channel_manager: Arc<ChannelManager>,
 	peer_manager: RwLock<Option<Weak<PeerManager>>>,
@@ -321,6 +363,22 @@ where
 
 	pub(crate) fn get_lsps2_lsp_details(&self) -> Option<(PublicKey, SocketAddress)> {
 		self.lsps2_client.as_ref().map(|s| (s.lsp_node_id, s.lsp_address.clone()))
+	}
+
+	/// Returns the SIP LSP details if configured.
+	pub(crate) fn get_sip_lsp_details(&self) -> Option<(PublicKey, SocketAddress)> {
+		self.sip_client.as_ref().map(|s| (s.node_id, s.address.clone()))
+	}
+
+	/// Request the LSP's SIP parameters via the `sip.get_info` protocol message.
+	pub(crate) fn sip_request_info(&self) -> Result<(), Error> {
+		let sip_client = self.sip_client.as_ref().ok_or(Error::LiquiditySourceUnavailable)?;
+		let handler = self.liquidity_manager.sip_client_handler().ok_or_else(|| {
+			log_error!(self.logger, "SIP client handler was not configured.");
+			Error::LiquiditySourceUnavailable
+		})?;
+		handler.request_sip_info(sip_client.node_id);
+		Ok(())
 	}
 
 	pub(crate) fn lsps2_channel_needs_manual_broadcast(
@@ -934,6 +992,69 @@ where
 						"Received unexpected LSPS2Client::InvoiceParametersReady event!"
 					);
 				}
+			},
+			LiquidityEvent::SIPClient(SIPClientEvent::GetInfoResponse {
+				lsp_node_id,
+				server_pubkey,
+				csv_delay,
+				..
+			}) => {
+				log_info!(
+					self.logger,
+					"Received SIP info from LSP {}: server_pubkey={}, csv_delay={}",
+					lsp_node_id,
+					server_pubkey,
+					csv_delay,
+				);
+			},
+			LiquidityEvent::SIPClient(SIPClientEvent::UtxoRegistered {
+				lsp_node_id,
+				outpoint,
+			}) => {
+				log_info!(
+					self.logger,
+					"SIP UTXO {} registered with LSP {}",
+					outpoint,
+					lsp_node_id,
+				);
+			},
+			LiquidityEvent::SIPClient(SIPClientEvent::SwapAccepted {
+				lsp_node_id,
+				channel_id,
+				..
+			}) => {
+				log_info!(
+					self.logger,
+					"SIP swap accepted by LSP {}: channel_id={}",
+					lsp_node_id,
+					channel_id,
+				);
+			},
+			LiquidityEvent::SIPService(SIPServiceEvent::UtxoRegistered {
+				counterparty_node_id,
+				outpoint,
+				value_sat,
+				..
+			}) => {
+				log_info!(
+					self.logger,
+					"SIP UTXO {} ({} sat) registered by client {}",
+					outpoint,
+					value_sat,
+					counterparty_node_id,
+				);
+			},
+			LiquidityEvent::SIPService(SIPServiceEvent::SwapRequested {
+				counterparty_node_id,
+				utxos,
+				..
+			}) => {
+				log_info!(
+					self.logger,
+					"SIP swap requested by client {} with {} UTXOs",
+					counterparty_node_id,
+					utxos.len(),
+				);
 			},
 			e => {
 				log_error!(self.logger, "Received unexpected liquidity event: {:?}", e);
