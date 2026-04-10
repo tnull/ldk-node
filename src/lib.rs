@@ -103,6 +103,7 @@ pub mod payment;
 mod peer_store;
 mod runtime;
 mod scoring;
+mod sip;
 mod tx_broadcaster;
 mod types;
 mod wallet;
