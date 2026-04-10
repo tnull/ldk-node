@@ -528,11 +528,11 @@ where
 		channel_manager: Arc<ChannelManager>, connection_manager: Arc<ConnectionManager<L>>,
 		output_sweeper: Arc<Sweeper>, network_graph: Arc<Graph>,
 		liquidity_source: Option<Arc<LiquiditySource<Arc<Logger>>>>,
-		sip_manager: Option<Arc<crate::sip::SipManager>>,
-		payment_store: Arc<PaymentStore>, peer_store: Arc<PeerStore<L>>,
-		keys_manager: Arc<KeysManager>, static_invoice_store: Option<StaticInvoiceStore>,
-		onion_messenger: Arc<OnionMessenger>, om_mailbox: Option<Arc<OnionMessageMailbox>>,
-		runtime: Arc<Runtime>, logger: L, config: Arc<Config>,
+		sip_manager: Option<Arc<crate::sip::SipManager>>, payment_store: Arc<PaymentStore>,
+		peer_store: Arc<PeerStore<L>>, keys_manager: Arc<KeysManager>,
+		static_invoice_store: Option<StaticInvoiceStore>, onion_messenger: Arc<OnionMessenger>,
+		om_mailbox: Option<Arc<OnionMessageMailbox>>, runtime: Arc<Runtime>, logger: L,
+		config: Arc<Config>,
 	) -> Self {
 		Self {
 			event_queue,
@@ -597,8 +597,7 @@ where
 						}
 
 						let cur_height = self.channel_manager.current_best_block().height;
-						let locktime =
-							LockTime::from_height(cur_height).unwrap_or(LockTime::ZERO);
+						let locktime = LockTime::from_height(cur_height).unwrap_or(LockTime::ZERO);
 
 						let mut outputs = vec![bitcoin::TxOut {
 							value: channel_amount,
@@ -1854,21 +1853,25 @@ where
 				..
 			} => {
 				// Check if any inputs belong to SIP UTXOs that need the server's signature.
-				let sip_inputs = self.sip_manager.as_ref().map(|sip_manager| {
-					let sip_wallet = sip_manager.wallet();
-					let utxos = sip_wallet.swappable_utxos();
-					unsigned_transaction
-						.input
-						.iter()
-						.enumerate()
-						.filter_map(|(i, input)| {
-							utxos
-								.iter()
-								.find(|u| u.outpoint == input.previous_output)
-								.map(|_| (i, input.previous_output))
-						})
-						.collect::<Vec<_>>()
-				}).unwrap_or_default();
+				let sip_inputs = self
+					.sip_manager
+					.as_ref()
+					.map(|sip_manager| {
+						let sip_wallet = sip_manager.wallet();
+						let utxos = sip_wallet.swappable_utxos();
+						unsigned_transaction
+							.input
+							.iter()
+							.enumerate()
+							.filter_map(|(i, input)| {
+								utxos
+									.iter()
+									.find(|u| u.outpoint == input.previous_output)
+									.map(|_| (i, input.previous_output))
+							})
+							.collect::<Vec<_>>()
+					})
+					.unwrap_or_default();
 
 				if !sip_inputs.is_empty() {
 					// This funding tx contains SIP inputs. Sign the wallet-owned inputs,
@@ -1876,15 +1879,13 @@ where
 					match self.wallet.sign_owned_inputs(unsigned_transaction) {
 						Ok(partially_signed_tx) => {
 							if let Some(sip_manager) = self.sip_manager.as_ref() {
-								sip_manager.stash_pending_funding(
-									crate::sip::PendingSipFunding {
-										channel_id,
-										counterparty_node_id,
-										tx: partially_signed_tx,
-										sip_inputs,
-										is_v1_open: false,
-									},
-								);
+								sip_manager.stash_pending_funding(crate::sip::PendingSipFunding {
+									channel_id,
+									counterparty_node_id,
+									tx: partially_signed_tx,
+									sip_inputs,
+									is_v1_open: false,
+								});
 							}
 						},
 						Err(()) => {

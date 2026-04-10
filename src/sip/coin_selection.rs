@@ -110,8 +110,7 @@ mod tests {
 	async fn test_empty_wallet_returns_err() {
 		let wallet = make_wallet();
 		let source = SipCoinSelectionSource::new(wallet);
-		let result =
-			source.select_confirmed_utxos(None, vec![], &[], 1000, u64::MAX).await;
+		let result = source.select_confirmed_utxos(None, vec![], &[], 1000, u64::MAX).await;
 		assert!(result.is_err());
 	}
 
@@ -137,10 +136,7 @@ mod tests {
 				sequence: Sequence::MAX,
 				witness: Witness::new(),
 			}],
-			output: vec![bitcoin::TxOut {
-				value: Amount::from_sat(100_000),
-				script_pubkey,
-			}],
+			output: vec![bitcoin::TxOut { value: Amount::from_sat(100_000), script_pubkey }],
 		};
 		let outpoint = OutPoint::new(prevtx.compute_txid(), 0);
 
@@ -148,8 +144,7 @@ mod tests {
 		wallet.confirm_utxo(&outpoint, 800_000);
 
 		let source = SipCoinSelectionSource::new(Arc::clone(&wallet));
-		let result =
-			source.select_confirmed_utxos(None, vec![], &[], 1000, u64::MAX).await;
+		let result = source.select_confirmed_utxos(None, vec![], &[], 1000, u64::MAX).await;
 
 		assert!(result.is_ok());
 		let selection = result.unwrap();

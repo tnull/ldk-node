@@ -144,10 +144,7 @@ async fn sip_address_funding_and_refund() {
 
 	// No refund possible yet.
 	let refund = node
-		.build_sip_refund_transaction(
-			expected_spk.clone(),
-			FeeRate::from_sat_per_vb(2).unwrap(),
-		)
+		.build_sip_refund_transaction(expected_spk.clone(), FeeRate::from_sat_per_vb(2).unwrap())
 		.unwrap();
 	assert!(refund.is_none());
 
@@ -162,7 +159,10 @@ async fn sip_address_funding_and_refund() {
 	// --- Step 7: Build and broadcast refund ---
 	let refund_addr = bitcoind_client.new_address().unwrap();
 	let (refund_tx, swept) = node
-		.build_sip_refund_transaction(refund_addr.script_pubkey(), FeeRate::from_sat_per_vb(2).unwrap())
+		.build_sip_refund_transaction(
+			refund_addr.script_pubkey(),
+			FeeRate::from_sat_per_vb(2).unwrap(),
+		)
 		.unwrap()
 		.expect("Should produce refund tx for expired UTXO");
 
@@ -299,11 +299,7 @@ async fn sip_cooperative_spend() {
 
 	// --- Step 4: Broadcast and verify Bitcoin Core accepts it ---
 	let result = bitcoind_client.send_raw_transaction(&coop_tx);
-	assert!(
-		result.is_ok(),
-		"Bitcoin Core rejected cooperative spend tx: {:?}",
-		result.err()
-	);
+	assert!(result.is_ok(), "Bitcoin Core rejected cooperative spend tx: {:?}", result.err());
 	let coop_txid: bitcoin::Txid = result.unwrap().0.parse().unwrap();
 	println!("Cooperative spend accepted by Bitcoin Core: txid={}", coop_txid);
 
@@ -314,9 +310,7 @@ async fn sip_cooperative_spend() {
 	let confirmed = electrs_client.transaction_get(&coop_txid).unwrap();
 	assert_eq!(confirmed.compute_txid(), coop_txid);
 
-	println!(
-		"SIP cooperative spend test passed: address → fund → confirm → coop spend → confirm"
-	);
+	println!("SIP cooperative spend test passed: address → fund → confirm → coop spend → confirm");
 
 	node.stop().unwrap();
 }
@@ -332,7 +326,8 @@ fn derive_node_secret_from_bip39_seed(seed: &[u8; 64], network: bitcoin::Network
 	let xprv = Xpriv::new_master(network, seed).expect("valid master");
 	let ldk_seed: [u8; 32] = xprv.private_key.secret_bytes();
 	// Step 3: KeysManager derives the node key from the LDK seed at m/0'.
-	let km_master = Xpriv::new_master(bitcoin::Network::Testnet, &ldk_seed).expect("valid km master");
+	let km_master =
+		Xpriv::new_master(bitcoin::Network::Testnet, &ldk_seed).expect("valid km master");
 	let node_key =
 		km_master.derive_priv(&secp, &[ChildNumber::from_hardened_idx(0).unwrap()]).unwrap();
 	node_key.private_key
@@ -446,9 +441,7 @@ async fn sip_open_channel() {
 		.expect("SIP output");
 
 	let sip_outpoint = OutPoint::new(txid, vout as u32);
-	client_node
-		.register_sip_utxo(sip_outpoint, txout.value, 0, funding_tx)
-		.unwrap();
+	client_node.register_sip_utxo(sip_outpoint, txout.value, 0, funding_tx).unwrap();
 
 	let height = bitcoind_client.get_blockchain_info().unwrap().blocks as u32;
 	client_node.confirm_sip_utxo(&sip_outpoint, height).unwrap();
@@ -491,20 +484,13 @@ async fn sip_open_channel() {
 		// address (index 0), and the server pubkey is the LSP's node_id:
 		let user_pubkey = {
 			// Re-derive: the SIP wallet derived user keys at m/787'/<index>
-			let xprv_master = Xpriv::new_master(
-				bitcoin::Network::Regtest,
-				&client_node_mnemonic_seed,
-			)
-			.unwrap();
+			let xprv_master =
+				Xpriv::new_master(bitcoin::Network::Regtest, &client_node_mnemonic_seed).unwrap();
 			let sip_xprv = xprv_master
-				.derive_priv(
-					&secp,
-					&[ChildNumber::from_hardened_idx(787).unwrap()],
-				)
+				.derive_priv(&secp, &[ChildNumber::from_hardened_idx(787).unwrap()])
 				.unwrap();
-			let user_child = sip_xprv
-				.derive_priv(&secp, &[ChildNumber::from_normal_idx(0).unwrap()])
-				.unwrap();
+			let user_child =
+				sip_xprv.derive_priv(&secp, &[ChildNumber::from_normal_idx(0).unwrap()]).unwrap();
 			PublicKey::from_secret_key(&secp, &user_child.private_key)
 		};
 
@@ -523,9 +509,8 @@ async fn sip_open_channel() {
 			)
 			.expect("valid sighash");
 
-		let msg = bitcoin::secp256k1::Message::from_digest(
-			bitcoin::hashes::Hash::to_byte_array(sighash),
-		);
+		let msg =
+			bitcoin::secp256k1::Message::from_digest(bitcoin::hashes::Hash::to_byte_array(sighash));
 		let server_sig = bitcoin::ecdsa::Signature {
 			signature: secp.sign_ecdsa(&msg, &lsp_node_secret),
 			sighash_type: bitcoin::EcdsaSighashType::All,
@@ -535,9 +520,7 @@ async fn sip_open_channel() {
 	}
 
 	// Complete the SIP funding with the server's signatures.
-	client_node
-		.complete_sip_funding(&channel_id, server_signatures)
-		.unwrap();
+	client_node.complete_sip_funding(&channel_id, server_signatures).unwrap();
 	println!("SIP funding completed with server signatures");
 
 	// --- Step 4: Wait for channel to become pending/ready ---

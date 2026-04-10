@@ -1965,8 +1965,7 @@ impl Node {
 	/// Call this when a deposit to a SIP address is detected on-chain. In production this
 	/// would be driven by chain sync; for testing it can be called manually.
 	pub fn register_sip_utxo(
-		&self, outpoint: OutPoint, value: Amount, address_index: u32,
-		prevtx: Transaction,
+		&self, outpoint: OutPoint, value: Amount, address_index: u32, prevtx: Transaction,
 	) -> Result<(), Error> {
 		let sip = self.sip_manager.as_ref().ok_or(Error::LiquiditySourceUnavailable)?;
 		sip.wallet().register_utxo(outpoint, value, address_index, prevtx);
@@ -2058,16 +2057,13 @@ impl Node {
 		// Create channel directly, bypassing check_sufficient_funds_for_channel
 		// since the funds come from SIP UTXOs, not the regular BDK wallet.
 		let user_channel_id: u128 = u128::from_ne_bytes(
-			self.keys_manager.get_secure_random_bytes()[..16]
-				.try_into()
-				.expect("16-byte slice"),
+			self.keys_manager.get_secure_random_bytes()[..16].try_into().expect("16-byte slice"),
 		);
 
 		let mut user_config = default_user_config(&self.config);
 		user_config.channel_handshake_config.announce_for_forwarding = false;
-		user_config
-			.channel_handshake_config
-			.max_inbound_htlc_value_in_flight_percent_of_channel = 100;
+		user_config.channel_handshake_config.max_inbound_htlc_value_in_flight_percent_of_channel =
+			100;
 
 		self.channel_manager
 			.create_channel(
@@ -2120,8 +2116,9 @@ impl Node {
 				Error::ChannelSplicingFailed
 			})?;
 
-		let min_feerate =
-			self.fee_estimator.estimate_fee_rate(crate::fee_estimator::ConfirmationTarget::ChannelFunding);
+		let min_feerate = self
+			.fee_estimator
+			.estimate_fee_rate(crate::fee_estimator::ConfirmationTarget::ChannelFunding);
 		let max_feerate = FeeRate::from_sat_per_kwu(min_feerate.to_sat_per_kwu() * 3 / 2);
 
 		let funding_template = self
@@ -2132,7 +2129,8 @@ impl Node {
 				Error::ChannelSplicingFailed
 			})?;
 
-		let sip_coin_source = crate::sip::coin_selection::SipCoinSelectionSource::new(sip.wallet_arc());
+		let sip_coin_source =
+			crate::sip::coin_selection::SipCoinSelectionSource::new(sip.wallet_arc());
 		let contribution = self
 			.runtime
 			.block_on(funding_template.splice_in(
@@ -2216,11 +2214,7 @@ impl Node {
 
 		for (input_idx, outpoint) in &pending.sip_inputs {
 			let server_sig = sip_signatures.get(outpoint).ok_or_else(|| {
-				log_error!(
-					self.logger,
-					"Missing server signature for SIP input {}",
-					outpoint
-				);
+				log_error!(self.logger, "Missing server signature for SIP input {}", outpoint);
 				Error::ChannelSplicingFailed
 			})?;
 
@@ -2267,22 +2261,14 @@ impl Node {
 
 		if pending.is_v1_open {
 			self.channel_manager
-				.funding_transaction_generated(
-					*channel_id,
-					pending.counterparty_node_id,
-					tx,
-				)
+				.funding_transaction_generated(*channel_id, pending.counterparty_node_id, tx)
 				.map_err(|e| {
 					log_error!(self.logger, "Failed to complete SIP channel open: {:?}", e);
 					Error::ChannelCreationFailed
 				})
 		} else {
 			self.channel_manager
-				.funding_transaction_signed(
-					channel_id,
-					&pending.counterparty_node_id,
-					tx,
-				)
+				.funding_transaction_signed(channel_id, &pending.counterparty_node_id, tx)
 				.map_err(|e| {
 					log_error!(self.logger, "Failed to complete SIP splice funding: {:?}", e);
 					Error::ChannelSplicingFailed
@@ -2291,9 +2277,7 @@ impl Node {
 	}
 
 	/// Marks a SIP UTXO as refunded after the refund transaction has been broadcast.
-	pub fn mark_sip_refunded(
-		&self, outpoint: &OutPoint, spending_txid: Txid,
-	) -> Result<(), Error> {
+	pub fn mark_sip_refunded(&self, outpoint: &OutPoint, spending_txid: Txid) -> Result<(), Error> {
 		let sip = self.sip_manager.as_ref().ok_or(Error::LiquiditySourceUnavailable)?;
 		sip.wallet().mark_refunded(outpoint, spending_txid);
 		Ok(())

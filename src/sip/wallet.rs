@@ -294,19 +294,21 @@ impl SipWallet {
 					outpoint,
 					channel_id
 				);
-				utxo.state =
-					SipUtxoState::SwapInitiated { channel_id };
+				utxo.state = SipUtxoState::SwapInitiated { channel_id };
 			}
 		}
 	}
 
 	/// Marks a UTXO as swapped (terminal state).
-	pub fn mark_swapped(
-		&self, outpoint: &OutPoint, channel_id: lightning::ln::types::ChannelId,
-	) {
+	pub fn mark_swapped(&self, outpoint: &OutPoint, channel_id: lightning::ln::types::ChannelId) {
 		let mut utxos = self.utxos.lock().unwrap();
 		if let Some(utxo) = utxos.get_mut(outpoint) {
-			log_info!(self.logger, "SIP UTXO {} swap completed for channel {}", outpoint, channel_id);
+			log_info!(
+				self.logger,
+				"SIP UTXO {} swap completed for channel {}",
+				outpoint,
+				channel_id
+			);
 			utxo.state = SipUtxoState::Swapped { channel_id };
 		}
 	}
@@ -338,11 +340,8 @@ impl SipWallet {
 		let mut total_value = Amount::ZERO;
 
 		for utxo in &refundable {
-			let witness_script = build_sip_witness_script(
-				&utxo.user_pubkey,
-				&utxo.server_pubkey,
-				utxo.csv_delay,
-			);
+			let witness_script =
+				build_sip_witness_script(&utxo.user_pubkey, &utxo.server_pubkey, utxo.csv_delay);
 
 			inputs.push(bitcoin::TxIn {
 				previous_output: utxo.outpoint,
@@ -389,11 +388,8 @@ impl SipWallet {
 
 		// Sign each input with the refund path.
 		for (i, utxo) in refundable.iter().enumerate() {
-			let witness_script = build_sip_witness_script(
-				&utxo.user_pubkey,
-				&utxo.server_pubkey,
-				utxo.csv_delay,
-			);
+			let witness_script =
+				build_sip_witness_script(&utxo.user_pubkey, &utxo.server_pubkey, utxo.csv_delay);
 
 			let sighash = bitcoin::sighash::SighashCache::new(&tx)
 				.p2wsh_signature_hash(
@@ -430,8 +426,7 @@ impl SipWallet {
 	/// NEVER be available to the client. This method accepts the server key directly only for
 	/// PoC testing purposes.
 	pub fn build_cooperative_spend_transaction(
-		&self, destination: bitcoin::ScriptBuf, fee_rate: FeeRate,
-		server_secret_key: &SecretKey,
+		&self, destination: bitcoin::ScriptBuf, fee_rate: FeeRate, server_secret_key: &SecretKey,
 	) -> Option<(Transaction, Vec<OutPoint>)> {
 		let secp = Secp256k1::new();
 		let swappable = self.swappable_utxos();
@@ -481,11 +476,8 @@ impl SipWallet {
 
 		// Sign each input with the cooperative path (both user + server).
 		for (i, utxo) in swappable.iter().enumerate() {
-			let witness_script = build_sip_witness_script(
-				&utxo.user_pubkey,
-				&utxo.server_pubkey,
-				utxo.csv_delay,
-			);
+			let witness_script =
+				build_sip_witness_script(&utxo.user_pubkey, &utxo.server_pubkey, utxo.csv_delay);
 
 			let sighash = bitcoin::sighash::SighashCache::new(&tx)
 				.p2wsh_signature_hash(
@@ -655,10 +647,11 @@ mod tests {
 		wallet.confirm_utxo(&outpoint, 800_000);
 
 		// Not yet expired.
-		let dest = bitcoin::ScriptBuf::new_p2wpkh(
-			&bitcoin::WPubkeyHash::from_slice(&[0; 20]).unwrap(),
-		);
-		assert!(wallet.build_refund_transaction(dest.clone(), FeeRate::from_sat_per_vb(2).unwrap()).is_none());
+		let dest =
+			bitcoin::ScriptBuf::new_p2wpkh(&bitcoin::WPubkeyHash::from_slice(&[0; 20]).unwrap());
+		assert!(wallet
+			.build_refund_transaction(dest.clone(), FeeRate::from_sat_per_vb(2).unwrap())
+			.is_none());
 
 		// Expire the CSV.
 		wallet.update_csv_expiry(802_016);

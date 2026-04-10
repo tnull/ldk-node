@@ -293,8 +293,7 @@ where
 		let lsps1_client_config = self.lsps1_client.as_ref().map(|s| s.ldk_client_config.clone());
 		let lsps2_client_config = self.lsps2_client.as_ref().map(|s| s.ldk_client_config.clone());
 		let lsps5_client_config = None;
-		let sip_client_config =
-			self.sip_client.as_ref().map(|_| LdkSIPClientConfig {});
+		let sip_client_config = self.sip_client.as_ref().map(|_| LdkSIPClientConfig {});
 		let liquidity_client_config = Some(LiquidityClientConfig {
 			lsps1_client_config,
 			lsps2_client_config,
@@ -1011,16 +1010,8 @@ where
 					csv_delay,
 				);
 			},
-			LiquidityEvent::SIPClient(SIPClientEvent::UtxoRegistered {
-				lsp_node_id,
-				outpoint,
-			}) => {
-				log_info!(
-					self.logger,
-					"SIP UTXO {} registered with LSP {}",
-					outpoint,
-					lsp_node_id,
-				);
+			LiquidityEvent::SIPClient(SIPClientEvent::UtxoRegistered { lsp_node_id, outpoint }) => {
+				log_info!(self.logger, "SIP UTXO {} registered with LSP {}", outpoint, lsp_node_id,);
 			},
 			LiquidityEvent::SIPClient(SIPClientEvent::SwapAccepted {
 				lsp_node_id,

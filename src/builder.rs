@@ -523,8 +523,7 @@ impl NodeBuilder {
 
 		let liquidity_source_config =
 			self.liquidity_source_config.get_or_insert(LiquiditySourceConfig::default());
-		liquidity_source_config.sip_client =
-			Some(SIPClientConfig { node_id, address, csv_delay });
+		liquidity_source_config.sip_client = Some(SIPClientConfig { node_id, address, csv_delay });
 		self
 	}
 
@@ -1872,7 +1871,11 @@ fn build_with_store_internal(
 			});
 
 			lsc.sip_client.as_ref().map(|config| {
-				liquidity_source_builder.sip_client(config.node_id, config.address.clone(), config.csv_delay)
+				liquidity_source_builder.sip_client(
+					config.node_id,
+					config.address.clone(),
+					config.csv_delay,
+				)
 			});
 
 			lsc.sip_service.as_ref().map(|config| {
@@ -2020,10 +2023,8 @@ fn build_with_store_internal(
 		_leak_checker.0.push(Arc::downgrade(&wallet) as Weak<dyn Any + Send + Sync>);
 	}
 
-	let sip_manager = liquidity_source_config
-		.as_ref()
-		.and_then(|lsc| lsc.sip_client.as_ref())
-		.map(|sip_config| {
+	let sip_manager = liquidity_source_config.as_ref().and_then(|lsc| lsc.sip_client.as_ref()).map(
+		|sip_config| {
 			Arc::new(crate::sip::SipManager::new(
 				xprv,
 				sip_config.node_id,
@@ -2031,7 +2032,8 @@ fn build_with_store_internal(
 				config.network,
 				Arc::clone(&logger),
 			))
-		});
+		},
+	);
 
 	Ok(Node {
 		runtime,

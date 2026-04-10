@@ -72,8 +72,13 @@ impl SipManager {
 		master_xpriv: Xpriv, server_pubkey: PublicKey, csv_delay: u16, network: Network,
 		logger: Arc<Logger>,
 	) -> Self {
-		let wallet =
-			Arc::new(SipWallet::new(master_xpriv, server_pubkey, csv_delay, network, logger.clone()));
+		let wallet = Arc::new(SipWallet::new(
+			master_xpriv,
+			server_pubkey,
+			csv_delay,
+			network,
+			logger.clone(),
+		));
 		Self {
 			wallet,
 			pending_fundings: Mutex::new(HashMap::new()),
@@ -95,9 +100,7 @@ impl SipManager {
 	}
 
 	/// Takes the pending funding for the given channel, if any.
-	pub(crate) fn take_pending_funding(
-		&self, channel_id: &ChannelId,
-	) -> Option<PendingSipFunding> {
+	pub(crate) fn take_pending_funding(&self, channel_id: &ChannelId) -> Option<PendingSipFunding> {
 		self.pending_fundings.lock().unwrap().remove(channel_id)
 	}
 
@@ -123,9 +126,7 @@ impl SipManager {
 	}
 
 	/// Returns a clone of the pending funding for the given channel, without removing it.
-	pub(crate) fn peek_pending_funding(
-		&self, channel_id: &ChannelId,
-	) -> Option<PendingSipFunding> {
+	pub(crate) fn peek_pending_funding(&self, channel_id: &ChannelId) -> Option<PendingSipFunding> {
 		self.pending_fundings.lock().unwrap().get(channel_id).cloned()
 	}
 
