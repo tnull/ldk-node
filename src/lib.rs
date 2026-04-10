@@ -228,6 +228,7 @@ pub struct Node {
 	gossip_source: Arc<GossipSource>,
 	pathfinding_scores_sync_url: Option<String>,
 	liquidity_source: Option<Arc<LiquiditySource<Arc<Logger>>>>,
+	sip_manager: Option<Arc<sip::SipManager>>,
 	kv_store: Arc<DynStore>,
 	logger: Arc<Logger>,
 	_router: Arc<Router>,
@@ -1934,6 +1935,28 @@ impl Node {
 			lightning_balances,
 			pending_balances_from_channel_closures,
 		}
+	}
+
+	/// Returns a new swap-in-potentiam deposit address.
+	///
+	/// Funds sent to this address are co-owned by the configured LSP and can be instantly swapped
+	/// into a Lightning channel once confirmed. If the LSP becomes unavailable, the funds can be
+	/// reclaimed unilaterally after the CSV timeout expires.
+	///
+	/// Requires a SIP manager to be configured via the builder.
+	pub fn sip_address(&self) -> Result<Address, Error> {
+		let sip = self.sip_manager.as_ref().ok_or(Error::LiquiditySourceUnavailable)?;
+		let info = sip.new_address();
+		Ok(info.address)
+	}
+
+	/// Returns information about all tracked swap-in-potentiam UTXOs.
+	///
+	/// This includes unconfirmed deposits, confirmed deposits ready for swapping, and expired
+	/// UTXOs eligible for refund.
+	pub fn list_sip_utxos(&self) -> Result<Vec<sip::state::SipUtxoInfo>, Error> {
+		let sip = self.sip_manager.as_ref().ok_or(Error::LiquiditySourceUnavailable)?;
+		Ok(sip.list_utxos())
 	}
 
 	/// Retrieves all payments that match the given predicate.

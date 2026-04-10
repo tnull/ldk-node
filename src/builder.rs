@@ -1990,6 +1990,7 @@ fn build_with_store_internal(
 		gossip_source,
 		pathfinding_scores_sync_url,
 		liquidity_source,
+		sip_manager: None,
 		kv_store,
 		logger,
 		_router: router,
