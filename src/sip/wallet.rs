@@ -16,8 +16,8 @@ use bitcoin::secp256k1::{PublicKey, Secp256k1, SecretKey};
 use bitcoin::{Address, Amount, FeeRate, Network, OutPoint, Transaction, Txid};
 
 use lightning_liquidity::sip::address::{
-	build_refund_witness, build_sip_witness_script, cooperative_spend_satisfaction_weight,
-	refund_spend_satisfaction_weight, sip_p2wsh_address,
+	build_cooperative_witness, build_refund_witness, build_sip_witness_script,
+	cooperative_spend_satisfaction_weight, refund_spend_satisfaction_weight, sip_p2wsh_address,
 };
 
 use crate::logger::{log_debug, log_info, log_trace, LdkLogger, Logger};
@@ -414,6 +414,108 @@ impl SipWallet {
 			};
 
 			tx.input[i].witness = build_refund_witness(&sig, &witness_script);
+		}
+
+		Some((tx, outpoints))
+	}
+
+	/// Builds a cooperative spend transaction sweeping confirmed SIP UTXOs to the given
+	/// destination.
+	///
+	/// Both the user and server sign each input via the cooperative (2-of-2 multisig) path.
+	///
+	/// # FIXME
+	/// In production, the server's signature should be obtained via the `sip.cosign` protocol
+	/// message exchange after the funding transaction is finalized. The server's secret key must
+	/// NEVER be available to the client. This method accepts the server key directly only for
+	/// PoC testing purposes.
+	pub fn build_cooperative_spend_transaction(
+		&self, destination: bitcoin::ScriptBuf, fee_rate: FeeRate,
+		server_secret_key: &SecretKey,
+	) -> Option<(Transaction, Vec<OutPoint>)> {
+		let secp = Secp256k1::new();
+		let swappable = self.swappable_utxos();
+		if swappable.is_empty() {
+			return None;
+		}
+
+		let mut inputs = Vec::new();
+		let mut outpoints = Vec::new();
+		let mut total_value = Amount::ZERO;
+
+		for utxo in &swappable {
+			inputs.push(bitcoin::TxIn {
+				previous_output: utxo.outpoint,
+				script_sig: bitcoin::ScriptBuf::new(),
+				sequence: bitcoin::Sequence::ENABLE_RBF_NO_LOCKTIME,
+				witness: bitcoin::Witness::new(),
+			});
+			outpoints.push(utxo.outpoint);
+			total_value += utxo.value;
+		}
+
+		// Estimate fee using cooperative spend weight.
+		let first_utxo = &swappable[0];
+		let witness_script = build_sip_witness_script(
+			&first_utxo.user_pubkey,
+			&first_utxo.server_pubkey,
+			first_utxo.csv_delay,
+		);
+		let input_weight = cooperative_spend_satisfaction_weight(&witness_script);
+		let estimated_weight = bitcoin::Weight::from_wu(40 * 4)
+			+ input_weight * inputs.len() as u64
+			+ bitcoin::Weight::from_wu(43 * 4);
+		let fee = fee_rate * estimated_weight;
+
+		let output_value = total_value.checked_sub(fee)?;
+		if output_value <= Amount::from_sat(546) {
+			return None;
+		}
+
+		let mut tx = Transaction {
+			version: bitcoin::transaction::Version::TWO,
+			lock_time: bitcoin::absolute::LockTime::ZERO,
+			input: inputs,
+			output: vec![bitcoin::TxOut { value: output_value, script_pubkey: destination }],
+		};
+
+		// Sign each input with the cooperative path (both user + server).
+		for (i, utxo) in swappable.iter().enumerate() {
+			let witness_script = build_sip_witness_script(
+				&utxo.user_pubkey,
+				&utxo.server_pubkey,
+				utxo.csv_delay,
+			);
+
+			let sighash = bitcoin::sighash::SighashCache::new(&tx)
+				.p2wsh_signature_hash(
+					i,
+					&witness_script,
+					utxo.value,
+					bitcoin::EcdsaSighashType::All,
+				)
+				.expect("valid sighash");
+
+			let msg = bitcoin::secp256k1::Message::from_digest(
+				bitcoin::hashes::Hash::to_byte_array(sighash),
+			);
+
+			let user_sk = self.derive_user_secret_key(utxo.address_index);
+			let user_sig = bitcoin::ecdsa::Signature {
+				signature: secp.sign_ecdsa(&msg, &user_sk),
+				sighash_type: bitcoin::EcdsaSighashType::All,
+			};
+
+			// FIXME: In production, the server's signature should be obtained via the
+			// `sip.cosign` protocol message exchange. The server's secret key must NEVER
+			// be available to the client. This direct signing exists only for PoC testing.
+			let server_sig = bitcoin::ecdsa::Signature {
+				signature: secp.sign_ecdsa(&msg, server_secret_key),
+				sighash_type: bitcoin::EcdsaSighashType::All,
+			};
+
+			tx.input[i].witness =
+				build_cooperative_witness(&user_sig, &server_sig, &witness_script);
 		}
 
 		Some((tx, outpoints))

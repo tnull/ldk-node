@@ -2001,6 +2001,25 @@ impl Node {
 		Ok(sip.wallet().build_refund_transaction(destination, fee_rate))
 	}
 
+	/// Builds a cooperative spend transaction sweeping confirmed SIP UTXOs to the given
+	/// destination, signed by both the user and server.
+	///
+	/// # FIXME
+	/// In production, the server's signature should be obtained via the `sip.cosign` protocol
+	/// message exchange. The server's secret key must NEVER be available to the client. This
+	/// method accepts the server key directly only for PoC testing purposes.
+	pub fn build_sip_cooperative_spend(
+		&self, destination: ScriptBuf, fee_rate: FeeRate,
+		server_secret_key: &bitcoin::secp256k1::SecretKey,
+	) -> Result<Option<(Transaction, Vec<OutPoint>)>, Error> {
+		let sip = self.sip_manager.as_ref().ok_or(Error::LiquiditySourceUnavailable)?;
+		Ok(sip.wallet().build_cooperative_spend_transaction(
+			destination,
+			fee_rate,
+			server_secret_key,
+		))
+	}
+
 	/// Marks a SIP UTXO as refunded after the refund transaction has been broadcast.
 	pub fn mark_sip_refunded(
 		&self, outpoint: &OutPoint, spending_txid: Txid,
