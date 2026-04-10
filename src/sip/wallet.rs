@@ -13,10 +13,11 @@ use std::sync::{Arc, Mutex};
 
 use bitcoin::bip32::{ChildNumber, Xpriv};
 use bitcoin::secp256k1::{PublicKey, Secp256k1, SecretKey};
-use bitcoin::{Address, Amount, Network, OutPoint, Transaction};
+use bitcoin::{Address, Amount, FeeRate, Network, OutPoint, Transaction, Txid};
 
 use lightning_liquidity::sip::address::{
-	build_sip_witness_script, cooperative_spend_satisfaction_weight, sip_p2wsh_address,
+	build_refund_witness, build_sip_witness_script, cooperative_spend_satisfaction_weight,
+	refund_spend_satisfaction_weight, sip_p2wsh_address,
 };
 
 use crate::logger::{log_debug, log_info, log_trace, LdkLogger, Logger};
@@ -279,11 +280,150 @@ impl SipWallet {
 		let addresses = self.addresses.lock().unwrap();
 		addresses.iter().find(|(_, info)| &info.address == address).map(|(index, _)| *index)
 	}
+
+	/// Marks a UTXO as swap-initiated.
+	pub(crate) fn mark_swap_initiated(
+		&self, outpoint: &OutPoint, channel_id: lightning::ln::types::ChannelId,
+	) {
+		let mut utxos = self.utxos.lock().unwrap();
+		if let Some(utxo) = utxos.get_mut(outpoint) {
+			if utxo.is_swappable() {
+				log_info!(
+					self.logger,
+					"SIP UTXO {} swap initiated for channel {}",
+					outpoint,
+					channel_id
+				);
+				utxo.state =
+					SipUtxoState::SwapInitiated { channel_id };
+			}
+		}
+	}
+
+	/// Marks a UTXO as swapped (terminal state).
+	pub(crate) fn mark_swapped(
+		&self, outpoint: &OutPoint, channel_id: lightning::ln::types::ChannelId,
+	) {
+		let mut utxos = self.utxos.lock().unwrap();
+		if let Some(utxo) = utxos.get_mut(outpoint) {
+			log_info!(self.logger, "SIP UTXO {} swap completed for channel {}", outpoint, channel_id);
+			utxo.state = SipUtxoState::Swapped { channel_id };
+		}
+	}
+
+	/// Marks a UTXO as refunded (terminal state).
+	pub(crate) fn mark_refunded(&self, outpoint: &OutPoint, spending_txid: Txid) {
+		let mut utxos = self.utxos.lock().unwrap();
+		if let Some(utxo) = utxos.get_mut(outpoint) {
+			log_info!(self.logger, "SIP UTXO {} refunded via {}", outpoint, spending_txid);
+			utxo.state = SipUtxoState::Refunded { spending_txid };
+		}
+	}
+
+	/// Builds a refund transaction sweeping all expired SIP UTXOs to the given destination.
+	///
+	/// Returns the signed transaction and the outpoints being swept, or `None` if no UTXOs are
+	/// eligible for refund.
+	pub(crate) fn build_refund_transaction(
+		&self, destination: bitcoin::ScriptBuf, fee_rate: FeeRate,
+	) -> Option<(Transaction, Vec<OutPoint>)> {
+		let secp = Secp256k1::new();
+		let refundable = self.refundable_utxos();
+		if refundable.is_empty() {
+			return None;
+		}
+
+		let mut inputs = Vec::new();
+		let mut outpoints = Vec::new();
+		let mut total_value = Amount::ZERO;
+
+		for utxo in &refundable {
+			let witness_script = build_sip_witness_script(
+				&utxo.user_pubkey,
+				&utxo.server_pubkey,
+				utxo.csv_delay,
+			);
+
+			inputs.push(bitcoin::TxIn {
+				previous_output: utxo.outpoint,
+				script_sig: bitcoin::ScriptBuf::new(),
+				sequence: bitcoin::Sequence::from_consensus(utxo.csv_delay as u32),
+				witness: bitcoin::Witness::new(),
+			});
+			outpoints.push(utxo.outpoint);
+			total_value += utxo.value;
+		}
+
+		// Estimate fee.
+		let first_utxo = &refundable[0];
+		let witness_script = build_sip_witness_script(
+			&first_utxo.user_pubkey,
+			&first_utxo.server_pubkey,
+			first_utxo.csv_delay,
+		);
+		let input_weight = refund_spend_satisfaction_weight(&witness_script);
+		// Base tx weight (version + locktime + input/output counts) + per-input + one output.
+		let estimated_weight = bitcoin::Weight::from_wu(40 * 4) // base fields
+			+ input_weight * inputs.len() as u64
+			+ bitcoin::Weight::from_wu(43 * 4); // P2WPKH output estimate
+		let fee = fee_rate * estimated_weight;
+
+		let output_value = total_value.checked_sub(fee)?;
+		if output_value <= Amount::from_sat(546) {
+			// Dust output, not worth sweeping.
+			log_info!(
+				self.logger,
+				"SIP refund would produce dust output ({} after {} fee), skipping",
+				output_value,
+				fee
+			);
+			return None;
+		}
+
+		let mut tx = Transaction {
+			version: bitcoin::transaction::Version::TWO,
+			lock_time: bitcoin::absolute::LockTime::ZERO,
+			input: inputs,
+			output: vec![bitcoin::TxOut { value: output_value, script_pubkey: destination }],
+		};
+
+		// Sign each input with the refund path.
+		for (i, utxo) in refundable.iter().enumerate() {
+			let witness_script = build_sip_witness_script(
+				&utxo.user_pubkey,
+				&utxo.server_pubkey,
+				utxo.csv_delay,
+			);
+
+			let sighash = bitcoin::sighash::SighashCache::new(&tx)
+				.p2wsh_signature_hash(
+					i,
+					&witness_script,
+					utxo.value,
+					bitcoin::EcdsaSighashType::All,
+				)
+				.expect("valid sighash");
+
+			let msg = bitcoin::secp256k1::Message::from_digest(
+				bitcoin::hashes::Hash::to_byte_array(sighash),
+			);
+			let sk = self.derive_user_secret_key(utxo.address_index);
+			let sig = bitcoin::ecdsa::Signature {
+				signature: secp.sign_ecdsa(&msg, &sk),
+				sighash_type: bitcoin::EcdsaSighashType::All,
+			};
+
+			tx.input[i].witness = build_refund_witness(&sig, &witness_script);
+		}
+
+		Some((tx, outpoints))
+	}
 }
 
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use bitcoin::hashes::Hash;
 
 	fn test_wallet() -> SipWallet {
 		let secp = Secp256k1::new();
@@ -381,5 +521,59 @@ mod tests {
 		let addr = wallet.new_address();
 
 		assert_eq!(wallet.address_index_for(&addr.address), Some(0));
+	}
+
+	#[test]
+	fn test_refund_transaction() {
+		let wallet = test_wallet();
+		let addr = wallet.new_address();
+
+		// Create a proper prevtx with the SIP script_pubkey.
+		let witness_script = build_sip_witness_script(
+			&addr.user_pubkey,
+			&wallet.server_pubkey(),
+			wallet.csv_delay(),
+		);
+		let script_pubkey = witness_script.to_p2wsh();
+
+		let prevtx = Transaction {
+			version: bitcoin::transaction::Version::TWO,
+			lock_time: bitcoin::absolute::LockTime::ZERO,
+			input: vec![bitcoin::TxIn {
+				previous_output: OutPoint::null(),
+				script_sig: bitcoin::ScriptBuf::new(),
+				sequence: bitcoin::Sequence::MAX,
+				witness: bitcoin::Witness::new(),
+			}],
+			output: vec![bitcoin::TxOut { value: Amount::from_sat(100_000), script_pubkey }],
+		};
+		let outpoint = OutPoint::new(prevtx.compute_txid(), 0);
+
+		wallet.register_utxo(outpoint, Amount::from_sat(100_000), addr.index, prevtx);
+		wallet.confirm_utxo(&outpoint, 800_000);
+
+		// Not yet expired.
+		let dest = bitcoin::ScriptBuf::new_p2wpkh(
+			&bitcoin::WPubkeyHash::from_slice(&[0; 20]).unwrap(),
+		);
+		assert!(wallet.build_refund_transaction(dest.clone(), FeeRate::from_sat_per_vb(2).unwrap()).is_none());
+
+		// Expire the CSV.
+		wallet.update_csv_expiry(802_016);
+
+		let result = wallet.build_refund_transaction(dest, FeeRate::from_sat_per_vb(2).unwrap());
+		assert!(result.is_some());
+
+		let (tx, swept_outpoints) = result.unwrap();
+		assert_eq!(swept_outpoints.len(), 1);
+		assert_eq!(swept_outpoints[0], outpoint);
+		assert_eq!(tx.input.len(), 1);
+		assert_eq!(tx.output.len(), 1);
+		// Output value should be less than input (fee deducted).
+		assert!(tx.output[0].value < Amount::from_sat(100_000));
+		// Input sequence should be the CSV delay.
+		assert_eq!(tx.input[0].sequence, bitcoin::Sequence::from_consensus(2016));
+		// Witness should be the refund path (3 items).
+		assert_eq!(tx.input[0].witness.len(), 3);
 	}
 }
