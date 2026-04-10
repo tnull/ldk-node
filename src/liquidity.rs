@@ -243,6 +243,7 @@ where
 				lsps1_service_config: None,
 				lsps2_service_config,
 				lsps5_service_config,
+				sip_service_config: None,
 				advertise_service,
 			}
 		});
@@ -254,6 +255,7 @@ where
 			lsps1_client_config,
 			lsps2_client_config,
 			lsps5_client_config,
+			sip_client_config: None,
 		});
 
 		let liquidity_manager = Arc::new(
