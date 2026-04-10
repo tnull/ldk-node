@@ -601,6 +601,7 @@ impl Node {
 			Arc::clone(&self.output_sweeper),
 			Arc::clone(&self.network_graph),
 			self.liquidity_source.clone(),
+			self.sip_manager.clone(),
 			Arc::clone(&self.payment_store),
 			Arc::clone(&self.peer_store),
 			Arc::clone(&self.keys_manager),
@@ -2018,6 +2019,160 @@ impl Node {
 			fee_rate,
 			server_secret_key,
 		))
+	}
+
+	/// Splice confirmed SIP UTXOs into an existing Lightning channel.
+	///
+	/// This uses the cooperative (2-of-2) spending path to move SIP-locked funds directly into
+	/// a channel, increasing its outbound liquidity. The LSP (counterparty) co-signs the SIP
+	/// inputs during the `FundingTransactionReadyForSigning` event handling.
+	pub fn splice_in_from_sip(
+		&self, user_channel_id: &UserChannelId, counterparty_node_id: PublicKey,
+	) -> Result<(), Error> {
+		let sip = self.sip_manager.as_ref().ok_or(Error::LiquiditySourceUnavailable)?;
+		let swappable = sip.wallet().swappable_utxos();
+		if swappable.is_empty() {
+			log_error!(self.logger, "No confirmed SIP UTXOs available for splice-in");
+			return Err(Error::InsufficientFunds);
+		}
+
+		let splice_value: u64 = swappable.iter().map(|u| u.value.to_sat()).sum();
+
+		let open_channels =
+			self.channel_manager.list_channels_with_counterparty(&counterparty_node_id);
+		let channel_details = open_channels
+			.iter()
+			.find(|c| c.user_channel_id == user_channel_id.0)
+			.ok_or_else(|| {
+				log_error!(self.logger, "Channel not found for SIP splice-in");
+				Error::ChannelSplicingFailed
+			})?;
+
+		let min_feerate =
+			self.fee_estimator.estimate_fee_rate(crate::fee_estimator::ConfirmationTarget::ChannelFunding);
+		let max_feerate = FeeRate::from_sat_per_kwu(min_feerate.to_sat_per_kwu() * 3 / 2);
+
+		let funding_template = self
+			.channel_manager
+			.splice_channel(&channel_details.channel_id, &counterparty_node_id)
+			.map_err(|e| {
+				log_error!(self.logger, "Failed to initiate SIP splice: {:?}", e);
+				Error::ChannelSplicingFailed
+			})?;
+
+		let sip_coin_source = crate::sip::coin_selection::SipCoinSelectionSource::new(sip.wallet_arc());
+		let contribution = self
+			.runtime
+			.block_on(funding_template.splice_in(
+				Amount::from_sat(splice_value),
+				min_feerate,
+				max_feerate,
+				sip_coin_source,
+			))
+			.map_err(|e| {
+				log_error!(self.logger, "Failed SIP splice coin selection: {}", e);
+				Error::ChannelSplicingFailed
+			})?;
+
+		self.channel_manager
+			.funding_contributed(
+				&channel_details.channel_id,
+				&counterparty_node_id,
+				contribution,
+				None,
+			)
+			.map_err(|e| {
+				log_error!(self.logger, "Failed to contribute SIP funding: {:?}", e);
+				Error::ChannelSplicingFailed
+			})
+	}
+
+	/// Completes a pending SIP-funded channel open or splice by providing the server's
+	/// cooperative signatures for the SIP inputs.
+	///
+	/// When a channel funding transaction contains SIP inputs, the
+	/// `FundingTransactionReadyForSigning` handler signs the wallet-owned inputs but stashes
+	/// the transaction, awaiting the server's (LSP's) signatures for the SIP UTXOs. Call this
+	/// method with those signatures to complete the funding flow.
+	///
+	/// `sip_signatures` maps each SIP input's `OutPoint` to the server's ECDSA signature for
+	/// that input's cooperative spend.
+	pub fn complete_sip_funding(
+		&self, channel_id: &lightning::ln::types::ChannelId,
+		sip_signatures: std::collections::HashMap<OutPoint, bitcoin::ecdsa::Signature>,
+	) -> Result<(), Error> {
+		let sip = self.sip_manager.as_ref().ok_or(Error::LiquiditySourceUnavailable)?;
+
+		let pending = sip.take_pending_funding(channel_id).ok_or_else(|| {
+			log_error!(self.logger, "No pending SIP funding for channel {}", channel_id);
+			Error::ChannelSplicingFailed
+		})?;
+
+		let secp = bitcoin::secp256k1::Secp256k1::new();
+		let sip_wallet = sip.wallet();
+		let mut tx = pending.unsigned_tx;
+
+		for (input_idx, outpoint) in &pending.sip_inputs {
+			let server_sig = sip_signatures.get(outpoint).ok_or_else(|| {
+				log_error!(
+					self.logger,
+					"Missing server signature for SIP input {}",
+					outpoint
+				);
+				Error::ChannelSplicingFailed
+			})?;
+
+			let utxos = sip_wallet.swappable_utxos();
+			let sip_utxo = utxos.iter().find(|u| u.outpoint == *outpoint).ok_or_else(|| {
+				log_error!(self.logger, "SIP UTXO {} not found in wallet", outpoint);
+				Error::ChannelSplicingFailed
+			})?;
+
+			let witness_script = lightning_liquidity::sip::address::build_sip_witness_script(
+				&sip_utxo.user_pubkey,
+				&sip_utxo.server_pubkey,
+				sip_utxo.csv_delay,
+			);
+
+			let sighash = bitcoin::sighash::SighashCache::new(&tx)
+				.p2wsh_signature_hash(
+					*input_idx,
+					&witness_script,
+					sip_utxo.value,
+					bitcoin::EcdsaSighashType::All,
+				)
+				.map_err(|e| {
+					log_error!(self.logger, "Failed to compute SIP sighash: {:?}", e);
+					Error::ChannelSplicingFailed
+				})?;
+
+			let msg = bitcoin::secp256k1::Message::from_digest(
+				bitcoin::hashes::Hash::to_byte_array(sighash),
+			);
+			let user_sk = sip_wallet.signing_key(sip_utxo.address_index);
+			let user_sig = bitcoin::ecdsa::Signature {
+				signature: secp.sign_ecdsa(&msg, &user_sk),
+				sighash_type: bitcoin::EcdsaSighashType::All,
+			};
+
+			tx.input[*input_idx].witness =
+				lightning_liquidity::sip::address::build_cooperative_witness(
+					&user_sig,
+					server_sig,
+					&witness_script,
+				);
+		}
+
+		self.channel_manager
+			.funding_transaction_signed(
+				channel_id,
+				&pending.counterparty_node_id,
+				tx,
+			)
+			.map_err(|e| {
+				log_error!(self.logger, "Failed to complete SIP funding: {:?}", e);
+				Error::ChannelSplicingFailed
+			})
 	}
 
 	/// Marks a SIP UTXO as refunded after the refund transaction has been broadcast.

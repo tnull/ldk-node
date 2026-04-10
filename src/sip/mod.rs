@@ -18,15 +18,27 @@ pub mod state;
 /// SIP wallet with BIP32 key derivation and UTXO tracking.
 pub mod wallet;
 
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 
 use bitcoin::bip32::Xpriv;
 use bitcoin::secp256k1::PublicKey;
-use bitcoin::Network;
+use bitcoin::{Network, OutPoint, Transaction, Txid};
+use lightning::ln::types::ChannelId;
 
 use crate::logger::{log_error, log_info, LdkLogger, Logger};
 use crate::sip::state::SipUtxoInfo;
 use crate::sip::wallet::{SipAddressInfo, SipWallet};
+
+/// A pending SIP funding transaction awaiting the server's cooperative signatures.
+#[derive(Clone)]
+pub(crate) struct PendingSipFunding {
+	pub channel_id: ChannelId,
+	pub counterparty_node_id: PublicKey,
+	pub unsigned_tx: Transaction,
+	/// The SIP input indices in the transaction and their corresponding outpoints.
+	pub sip_inputs: Vec<(usize, OutPoint)>,
+}
 
 /// Orchestrates the SIP wallet and protocol layers.
 ///
@@ -35,6 +47,8 @@ use crate::sip::wallet::{SipAddressInfo, SipWallet};
 /// with ldk-node's channel management (funding channels and splicing from SIP UTXOs).
 pub(crate) struct SipManager {
 	wallet: Arc<SipWallet>,
+	/// Funding transactions waiting for the server's cooperative SIP signatures.
+	pending_fundings: Mutex<HashMap<ChannelId, PendingSipFunding>>,
 	logger: Arc<Logger>,
 }
 
@@ -49,7 +63,26 @@ impl SipManager {
 	) -> Self {
 		let wallet =
 			Arc::new(SipWallet::new(master_xpriv, server_pubkey, csv_delay, network, logger.clone()));
-		Self { wallet, logger }
+		Self { wallet, pending_fundings: Mutex::new(HashMap::new()), logger }
+	}
+
+	/// Stashes a pending funding transaction that contains SIP inputs awaiting the server's
+	/// cooperative signatures.
+	pub(crate) fn stash_pending_funding(&self, pending: PendingSipFunding) {
+		log_info!(
+			self.logger,
+			"Stashed SIP funding for channel {} with {} SIP inputs, awaiting server signatures",
+			pending.channel_id,
+			pending.sip_inputs.len(),
+		);
+		self.pending_fundings.lock().unwrap().insert(pending.channel_id, pending);
+	}
+
+	/// Takes the pending funding for the given channel, if any.
+	pub(crate) fn take_pending_funding(
+		&self, channel_id: &ChannelId,
+	) -> Option<PendingSipFunding> {
+		self.pending_fundings.lock().unwrap().remove(channel_id)
 	}
 
 	/// Returns a reference to the SIP wallet.

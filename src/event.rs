@@ -506,6 +506,7 @@ where
 	output_sweeper: Arc<Sweeper>,
 	network_graph: Arc<Graph>,
 	liquidity_source: Option<Arc<LiquiditySource<Arc<Logger>>>>,
+	sip_manager: Option<Arc<crate::sip::SipManager>>,
 	payment_store: Arc<PaymentStore>,
 	peer_store: Arc<PeerStore<L>>,
 	keys_manager: Arc<KeysManager>,
@@ -527,6 +528,7 @@ where
 		channel_manager: Arc<ChannelManager>, connection_manager: Arc<ConnectionManager<L>>,
 		output_sweeper: Arc<Sweeper>, network_graph: Arc<Graph>,
 		liquidity_source: Option<Arc<LiquiditySource<Arc<Logger>>>>,
+		sip_manager: Option<Arc<crate::sip::SipManager>>,
 		payment_store: Arc<PaymentStore>, peer_store: Arc<PeerStore<L>>,
 		keys_manager: Arc<KeysManager>, static_invoice_store: Option<StaticInvoiceStore>,
 		onion_messenger: Arc<OnionMessenger>, om_mailbox: Option<Arc<OnionMessageMailbox>>,
@@ -541,6 +543,7 @@ where
 			output_sweeper,
 			network_graph,
 			liquidity_source,
+			sip_manager,
 			payment_store,
 			peer_store,
 			keys_manager,
@@ -1761,29 +1764,80 @@ where
 				counterparty_node_id,
 				unsigned_transaction,
 				..
-			} => match self.wallet.sign_owned_inputs(unsigned_transaction) {
-				Ok(partially_signed_tx) => {
-					match self.channel_manager.funding_transaction_signed(
-						&channel_id,
-						&counterparty_node_id,
-						partially_signed_tx,
-					) {
-						Ok(()) => {
-							log_info!(
-								self.logger,
-								"Signed funding transaction for channel {} with counterparty {}",
-								channel_id,
-								counterparty_node_id
-							);
+			} => {
+				// Check if any inputs belong to SIP UTXOs that need the server's signature.
+				let sip_inputs = self.sip_manager.as_ref().map(|sip_manager| {
+					let sip_wallet = sip_manager.wallet();
+					let utxos = sip_wallet.swappable_utxos();
+					unsigned_transaction
+						.input
+						.iter()
+						.enumerate()
+						.filter_map(|(i, input)| {
+							utxos
+								.iter()
+								.find(|u| u.outpoint == input.previous_output)
+								.map(|_| (i, input.previous_output))
+						})
+						.collect::<Vec<_>>()
+				}).unwrap_or_default();
+
+				if !sip_inputs.is_empty() {
+					// This funding tx contains SIP inputs. Sign the wallet-owned inputs,
+					// then stash the partially-signed tx until the server's signatures arrive.
+					match self.wallet.sign_owned_inputs(unsigned_transaction) {
+						Ok(partially_signed_tx) => {
+							if let Some(sip_manager) = self.sip_manager.as_ref() {
+								sip_manager.stash_pending_funding(
+									crate::sip::PendingSipFunding {
+										channel_id,
+										counterparty_node_id,
+										unsigned_tx: partially_signed_tx,
+										sip_inputs,
+									},
+								);
+							}
 						},
-						Err(e) => {
-							// TODO(splicing): Abort splice once supported in LDK 0.3
-							debug_assert!(false, "Failed signing funding transaction: {:?}", e);
-							log_error!(self.logger, "Failed signing funding transaction: {:?}", e);
+						Err(()) => {
+							log_error!(self.logger, "Failed signing wallet inputs for SIP funding");
 						},
 					}
-				},
-				Err(()) => log_error!(self.logger, "Failed signing funding transaction"),
+				} else {
+					// No SIP inputs -- sign normally and complete immediately.
+					match self.wallet.sign_owned_inputs(unsigned_transaction) {
+						Ok(partially_signed_tx) => {
+							match self.channel_manager.funding_transaction_signed(
+								&channel_id,
+								&counterparty_node_id,
+								partially_signed_tx,
+							) {
+								Ok(()) => {
+									log_info!(
+										self.logger,
+										"Signed funding transaction for channel {} with counterparty {}",
+										channel_id,
+										counterparty_node_id
+									);
+								},
+								Err(e) => {
+									debug_assert!(
+										false,
+										"Failed signing funding transaction: {:?}",
+										e
+									);
+									log_error!(
+										self.logger,
+										"Failed signing funding transaction: {:?}",
+										e
+									);
+								},
+							}
+						},
+						Err(()) => {
+							log_error!(self.logger, "Failed signing funding transaction");
+						},
+					}
+				}
 			},
 			LdkEvent::SplicePending {
 				channel_id,
