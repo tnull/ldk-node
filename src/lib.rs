@@ -2021,6 +2021,78 @@ impl Node {
 		))
 	}
 
+	/// Opens a new channel funded by confirmed SIP UTXOs.
+	///
+	/// This initiates a channel open with the LSP. When `FundingGenerationReady` fires, the
+	/// funding transaction will be constructed from SIP UTXOs instead of the regular wallet.
+	/// The caller must then provide the server's cooperative signatures via
+	/// [`complete_sip_funding`] to complete the channel open.
+	///
+	/// [`complete_sip_funding`]: Self::complete_sip_funding
+	pub fn open_channel_from_sip(
+		&self, counterparty_node_id: PublicKey, address: SocketAddress,
+	) -> Result<UserChannelId, Error> {
+		if !*self.is_running.read().expect("lock") {
+			return Err(Error::NotRunning);
+		}
+
+		let sip = self.sip_manager.as_ref().ok_or(Error::LiquiditySourceUnavailable)?;
+		let swappable = sip.wallet().swappable_utxos();
+		if swappable.is_empty() {
+			return Err(Error::InsufficientFunds);
+		}
+
+		let channel_value: u64 = swappable.iter().map(|u| u.value.to_sat()).sum();
+		// Leave room for fees.
+		let fee_buffer = 5_000u64;
+		let channel_value = channel_value.saturating_sub(fee_buffer);
+
+		// Connect to the peer.
+		let con_cm = Arc::clone(&self.connection_manager);
+		let con_node_id = counterparty_node_id;
+		let con_addr = address.clone();
+		self.runtime.block_on(async move {
+			con_cm.connect_peer_if_necessary(con_node_id, con_addr).await
+		})?;
+
+		// Create channel directly, bypassing check_sufficient_funds_for_channel
+		// since the funds come from SIP UTXOs, not the regular BDK wallet.
+		let user_channel_id: u128 = u128::from_ne_bytes(
+			self.keys_manager.get_secure_random_bytes()[..16]
+				.try_into()
+				.expect("16-byte slice"),
+		);
+
+		let mut user_config = default_user_config(&self.config);
+		user_config.channel_handshake_config.announce_for_forwarding = false;
+		user_config
+			.channel_handshake_config
+			.max_inbound_htlc_value_in_flight_percent_of_channel = 100;
+
+		self.channel_manager
+			.create_channel(
+				counterparty_node_id,
+				channel_value,
+				0,
+				user_channel_id,
+				None,
+				Some(user_config),
+			)
+			.map_err(|e| {
+				log_error!(self.logger, "Failed to initiate SIP channel open: {:?}", e);
+				Error::ChannelCreationFailed
+			})?;
+
+		let peer_info = PeerInfo { node_id: counterparty_node_id, address };
+		self.peer_store.add_peer(peer_info)?;
+
+		// Mark this channel as SIP-funded so the FundingGenerationReady handler
+		// constructs the funding tx from SIP UTXOs.
+		sip.register_sip_open(user_channel_id);
+
+		Ok(UserChannelId(user_channel_id))
+	}
+
 	/// Splice confirmed SIP UTXOs into an existing Lightning channel.
 	///
 	/// This uses the cooperative (2-of-2) spending path to move SIP-locked funds directly into
@@ -2110,7 +2182,7 @@ impl Node {
 
 		let secp = bitcoin::secp256k1::Secp256k1::new();
 		let sip_wallet = sip.wallet();
-		let mut tx = pending.unsigned_tx;
+		let mut tx = pending.tx;
 
 		for (input_idx, outpoint) in &pending.sip_inputs {
 			let server_sig = sip_signatures.get(outpoint).ok_or_else(|| {
@@ -2163,16 +2235,29 @@ impl Node {
 				);
 		}
 
-		self.channel_manager
-			.funding_transaction_signed(
-				channel_id,
-				&pending.counterparty_node_id,
-				tx,
-			)
-			.map_err(|e| {
-				log_error!(self.logger, "Failed to complete SIP funding: {:?}", e);
-				Error::ChannelSplicingFailed
-			})
+		if pending.is_v1_open {
+			self.channel_manager
+				.funding_transaction_generated(
+					*channel_id,
+					pending.counterparty_node_id,
+					tx,
+				)
+				.map_err(|e| {
+					log_error!(self.logger, "Failed to complete SIP channel open: {:?}", e);
+					Error::ChannelCreationFailed
+				})
+		} else {
+			self.channel_manager
+				.funding_transaction_signed(
+					channel_id,
+					&pending.counterparty_node_id,
+					tx,
+				)
+				.map_err(|e| {
+					log_error!(self.logger, "Failed to complete SIP splice funding: {:?}", e);
+					Error::ChannelSplicingFailed
+				})
+		}
 	}
 
 	/// Marks a SIP UTXO as refunded after the refund transaction has been broadcast.

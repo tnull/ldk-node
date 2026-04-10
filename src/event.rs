@@ -565,8 +565,96 @@ where
 				output_script,
 				user_channel_id,
 			} => {
-				// Construct the raw transaction with the output that is paid the amount of the
-				// channel.
+				// Check if this channel open should be funded from SIP UTXOs.
+				let is_sip_funded = self
+					.sip_manager
+					.as_ref()
+					.map(|sip| sip.take_sip_open(user_channel_id))
+					.unwrap_or(false);
+
+				if is_sip_funded {
+					if let Some(sip_manager) = self.sip_manager.as_ref() {
+						let sip_wallet = sip_manager.wallet();
+						let swappable = sip_wallet.swappable_utxos();
+
+						let channel_amount = Amount::from_sat(channel_value_satoshis);
+
+						// Construct funding tx from SIP UTXOs.
+						let mut inputs = Vec::new();
+						let mut sip_inputs = Vec::new();
+						let mut total_input = Amount::ZERO;
+
+						for utxo in &swappable {
+							let idx = inputs.len();
+							inputs.push(bitcoin::TxIn {
+								previous_output: utxo.outpoint,
+								script_sig: bitcoin::ScriptBuf::new(),
+								sequence: bitcoin::Sequence::ENABLE_RBF_NO_LOCKTIME,
+								witness: bitcoin::Witness::new(),
+							});
+							sip_inputs.push((idx, utxo.outpoint));
+							total_input += utxo.value;
+						}
+
+						let cur_height = self.channel_manager.current_best_block().height;
+						let locktime =
+							LockTime::from_height(cur_height).unwrap_or(LockTime::ZERO);
+
+						let mut outputs = vec![bitcoin::TxOut {
+							value: channel_amount,
+							script_pubkey: output_script.clone(),
+						}];
+
+						// Add change output if there's excess.
+						let fee = Amount::from_sat(1_000); // Simple fee estimate for PoC.
+						let change = total_input
+							.checked_sub(channel_amount)
+							.and_then(|r| r.checked_sub(fee));
+						if let Some(change_amount) = change {
+							if change_amount > Amount::from_sat(546) {
+								let change_addr =
+									self.wallet.get_new_address().unwrap_or_else(|_| {
+										bitcoin::Address::p2wpkh(
+											&bitcoin::CompressedPublicKey::from_slice(&[2; 33])
+												.unwrap(),
+											self.config.network,
+										)
+									});
+								outputs.push(bitcoin::TxOut {
+									value: change_amount,
+									script_pubkey: change_addr.script_pubkey(),
+								});
+							}
+						}
+
+						let tx = bitcoin::Transaction {
+							version: bitcoin::transaction::Version::TWO,
+							lock_time: locktime,
+							input: inputs,
+							output: outputs,
+						};
+
+						// Stash the unsigned funding tx. The application must call
+						// complete_sip_funding() with the server's signatures.
+						sip_manager.stash_pending_funding(crate::sip::PendingSipFunding {
+							channel_id: temporary_channel_id,
+							counterparty_node_id,
+							tx,
+							sip_inputs,
+							is_v1_open: true,
+						});
+
+						log_info!(
+							self.logger,
+							"SIP-funded channel open: stashed funding tx for channel {}, \
+							 awaiting server signatures via complete_sip_funding()",
+							temporary_channel_id,
+						);
+					}
+					return Ok(());
+				}
+
+				// Normal (non-SIP) funding flow.
 				let confirmation_target = ConfirmationTarget::ChannelFunding;
 
 				// We set nLockTime to the current height to discourage fee sniping.
@@ -1792,8 +1880,9 @@ where
 									crate::sip::PendingSipFunding {
 										channel_id,
 										counterparty_node_id,
-										unsigned_tx: partially_signed_tx,
+										tx: partially_signed_tx,
 										sip_inputs,
+										is_v1_open: false,
 									},
 								);
 							}

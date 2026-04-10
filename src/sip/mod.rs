@@ -35,9 +35,18 @@ use crate::sip::wallet::{SipAddressInfo, SipWallet};
 pub(crate) struct PendingSipFunding {
 	pub channel_id: ChannelId,
 	pub counterparty_node_id: PublicKey,
-	pub unsigned_tx: Transaction,
+	pub tx: Transaction,
 	/// The SIP input indices in the transaction and their corresponding outpoints.
 	pub sip_inputs: Vec<(usize, OutPoint)>,
+	/// Whether this is a V1 channel open (uses `funding_transaction_generated`).
+	pub is_v1_open: bool,
+}
+
+/// Tracks channel opens that should be funded from SIP UTXOs.
+/// When `FundingGenerationReady` fires for one of these channels, the handler constructs
+/// the funding tx from SIP UTXOs instead of the regular wallet.
+pub(crate) struct PendingSipChannelOpen {
+	pub user_channel_id: u128,
 }
 
 /// Orchestrates the SIP wallet and protocol layers.
@@ -49,6 +58,8 @@ pub(crate) struct SipManager {
 	wallet: Arc<SipWallet>,
 	/// Funding transactions waiting for the server's cooperative SIP signatures.
 	pending_fundings: Mutex<HashMap<ChannelId, PendingSipFunding>>,
+	/// Channel opens that should be funded from SIP UTXOs.
+	pending_sip_opens: Mutex<Vec<u128>>,
 	logger: Arc<Logger>,
 }
 
@@ -63,7 +74,12 @@ impl SipManager {
 	) -> Self {
 		let wallet =
 			Arc::new(SipWallet::new(master_xpriv, server_pubkey, csv_delay, network, logger.clone()));
-		Self { wallet, pending_fundings: Mutex::new(HashMap::new()), logger }
+		Self {
+			wallet,
+			pending_fundings: Mutex::new(HashMap::new()),
+			pending_sip_opens: Mutex::new(Vec::new()),
+			logger,
+		}
 	}
 
 	/// Stashes a pending funding transaction that contains SIP inputs awaiting the server's
@@ -83,6 +99,22 @@ impl SipManager {
 		&self, channel_id: &ChannelId,
 	) -> Option<PendingSipFunding> {
 		self.pending_fundings.lock().unwrap().remove(channel_id)
+	}
+
+	/// Registers a channel open as SIP-funded.
+	pub(crate) fn register_sip_open(&self, user_channel_id: u128) {
+		self.pending_sip_opens.lock().unwrap().push(user_channel_id);
+	}
+
+	/// Checks and removes a pending SIP open for the given user_channel_id.
+	pub(crate) fn take_sip_open(&self, user_channel_id: u128) -> bool {
+		let mut opens = self.pending_sip_opens.lock().unwrap();
+		if let Some(pos) = opens.iter().position(|id| *id == user_channel_id) {
+			opens.remove(pos);
+			true
+		} else {
+			false
+		}
 	}
 
 	/// Returns a reference to the SIP wallet.
