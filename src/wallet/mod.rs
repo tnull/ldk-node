@@ -55,7 +55,7 @@ use persist::KVStoreWalletPersister;
 
 use crate::config::{Config, ADDRESS_POOL_SIZE};
 use crate::data_store::StorableObject;
-use crate::event::EventQueue;
+use crate::event::{Event, EventQueue};
 use crate::fee_estimator::{ConfirmationTarget, FeeEstimator, OnchainFeeEstimator};
 use crate::logger::{log_debug, log_error, log_info, log_trace, LdkLogger, Logger};
 use crate::payment::pending_payment_store::PendingPaymentDetailsUpdate;
@@ -388,12 +388,16 @@ impl Wallet {
 						)
 					};
 
-					self.payment_store.insert_or_update(payment.clone()).await?;
+					let (updated, stored_payment) =
+						self.payment_store.insert_or_update_and_get(payment).await?;
+
+					if updated && payment_status == PaymentStatus::Succeeded {
+						self.emit_onchain_payment_event(&stored_payment).await?;
+					}
 
 					if payment_status == PaymentStatus::Pending {
 						let pending_payment =
-							self.create_pending_payment_from_tx(payment, Vec::new());
-
+							self.create_pending_payment_from_tx(stored_payment, Vec::new());
 						self.pending_payment_store.insert_or_update(pending_payment).await?;
 					}
 				},
@@ -429,7 +433,8 @@ impl Wallet {
 									// snapshot (or was removed) declines, leaving future
 									// events to drive it.
 									let mut graduated = false;
-									self.payment_store
+									let stored_payment = self
+										.payment_store
 										.mutate(&payment_id, |existing| {
 											let current = existing?;
 											match current.kind {
@@ -451,6 +456,9 @@ impl Wallet {
 											}
 										})
 										.await?;
+									if let Some(stored_payment) = stored_payment {
+										self.emit_onchain_payment_event(&stored_payment).await?;
+									}
 									if graduated {
 										self.pending_payment_store.remove(&payment_id).await?;
 									}
@@ -1898,6 +1906,76 @@ impl Wallet {
 		&self, payment: PaymentDetails, conflicting_txids: Vec<Txid>,
 	) -> PendingPaymentDetails {
 		PendingPaymentDetails::new(payment, conflicting_txids, Vec::new())
+	}
+
+	async fn emit_onchain_payment_event(&self, payment: &PaymentDetails) -> Result<(), Error> {
+		if payment.status != PaymentStatus::Succeeded {
+			return Ok(());
+		}
+
+		let (txid, block_hash, block_height) = match &payment.kind {
+			PaymentKind::Onchain {
+				txid,
+				status: ConfirmationStatus::Confirmed { block_hash, height, .. },
+				tx_type: None,
+			} => (*txid, *block_hash, *height),
+			_ => return Ok(()),
+		};
+
+		let Some(amount_msat) = payment.amount_msat else {
+			log_error!(
+				self.logger,
+				"Skipping on-chain payment event for {} due to missing amount",
+				payment.id
+			);
+			return Ok(());
+		};
+		if payment.direction == PaymentDirection::Inbound
+			&& !self.transaction_pays_external_address(txid)
+		{
+			return Ok(());
+		}
+
+		let event = match payment.direction {
+			PaymentDirection::Outbound => Event::OnchainPaymentSuccessful {
+				payment_id: payment.id,
+				txid,
+				amount_msat,
+				block_hash,
+				block_height,
+			},
+			PaymentDirection::Inbound => Event::OnchainPaymentReceived {
+				payment_id: payment.id,
+				txid,
+				amount_msat,
+				block_hash,
+				block_height,
+			},
+		};
+
+		self.event_queue.add_event(event).await.map_err(|e| {
+			log_error!(self.logger, "Failed to push on-chain payment event: {}", e);
+			Error::PersistenceFailed
+		})
+	}
+
+	/// Whether the transaction pays an address from the user-facing external keychain.
+	fn transaction_pays_external_address(&self, txid: Txid) -> bool {
+		let locked_wallet = self.inner.lock().expect("lock");
+		let Some(tx) = locked_wallet.get_tx(txid) else {
+			log_error!(
+				self.logger,
+				"Skipping on-chain payment event for transaction {} missing from the wallet",
+				txid
+			);
+			return false;
+		};
+		tx.tx_node.tx.output.iter().any(|output| {
+			matches!(
+				locked_wallet.derivation_of_spk(output.script_pubkey.clone()),
+				Some((KeychainKind::External, _))
+			)
+		})
 	}
 
 	fn find_payment_by_txid(&self, target_txid: Txid) -> Option<PaymentId> {
@@ -3671,6 +3749,41 @@ mod tests {
 			height: 100,
 			timestamp: 1,
 		}
+	}
+
+	#[tokio::test]
+	async fn internal_wallet_receipts_emit_no_payment_event() {
+		let store: Arc<DynStore> = Arc::new(DynStoreWrapper(InMemoryStore::new()));
+		let wallet = new_test_wallet(store, false).await;
+		wallet.refill_address_pool().await.unwrap();
+
+		let internal_script = wallet
+			.inner
+			.lock()
+			.unwrap()
+			.peek_address(KeychainKind::Internal, 0)
+			.address
+			.script_pubkey();
+		let tx = Transaction {
+			version: bitcoin::transaction::Version::TWO,
+			lock_time: LockTime::ZERO,
+			input: Vec::new(),
+			output: vec![TxOut { value: Amount::from_sat(1_000), script_pubkey: internal_script }],
+		};
+		let txid = tx.compute_txid();
+		wallet.inner.lock().unwrap().apply_unconfirmed_txs([(tx, 1)]);
+
+		let payment = PaymentDetails::new(
+			PaymentId(txid.to_byte_array()),
+			PaymentKind::Onchain { txid, status: confirmed_status(), tx_type: None },
+			Some(1_000_000),
+			None,
+			PaymentDirection::Inbound,
+			PaymentStatus::Succeeded,
+		);
+		wallet.emit_onchain_payment_event(&payment).await.unwrap();
+
+		assert!(wallet.event_queue.next_event().is_none());
 	}
 
 	#[test]

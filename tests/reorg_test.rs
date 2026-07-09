@@ -3,6 +3,7 @@ use std::collections::HashMap;
 
 use bitcoin::Amount;
 use electrsd::corepc_node::mtype::ChainTipsStatus;
+use ldk_node::lightning::chain::channelmonitor::ANTI_REORG_DELAY;
 use ldk_node::payment::{PaymentDirection, PaymentKind};
 use ldk_node::{Event, LightningBalance, PendingSweepBalance};
 use proptest::prelude::prop;
@@ -12,7 +13,8 @@ use serde_json::json;
 use crate::common::{
 	expect_event, exponential_backoff_poll, generate_blocks_and_wait, invalidate_blocks,
 	open_channel, premine_and_distribute_funds, random_chain_source, random_config,
-	setup_bitcoind_and_electrsd, setup_node, wait_for_outpoint_spend, wait_for_tx, TestChainSource,
+	setup_bitcoind_and_electrsd, setup_node, wait_for_outpoint_spend, wait_for_tx,
+	ExpectOnchainPaymentEvent, OnchainPaymentEvent, TestChainSource,
 };
 
 #[test]
@@ -125,7 +127,8 @@ proptest! {
 			let amount_sat = 2_100_000;
 			let addr_nodes =
 				nodes.iter().map(|node| node.onchain_payment().new_address().unwrap()).collect::<Vec<_>>();
-			premine_and_distribute_funds(bitcoind, electrs, addr_nodes, Amount::from_sat(amount_sat)).await;
+			let premine_txid =
+				premine_and_distribute_funds(bitcoind, electrs, addr_nodes, Amount::from_sat(amount_sat)).await;
 
 			macro_rules! sync_wallets {
 				() => {
@@ -140,6 +143,14 @@ proptest! {
 				assert_eq!(node.list_balances().total_onchain_balance_sats, amount_sat);
 			});
 
+			generate_blocks_and_wait(bitcoind, electrs, (ANTI_REORG_DELAY - 1) as usize).await;
+			sync_wallets!();
+			for node in &nodes {
+				assert_eq!(
+					node.expect_onchain_payment_event(OnchainPaymentEvent::Received).await,
+					premine_txid,
+				);
+			}
 
 			let mut nodes_funding_tx = HashMap::new();
 			let funding_amount_sat = 2_000_000;
