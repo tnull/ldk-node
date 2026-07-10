@@ -84,33 +84,43 @@ where
 	/// Like [`Self::insert`], but when an entry with the object's id already exists, merges the
 	/// object's full update ([`StorableObject::to_update`]) into it instead of replacing it.
 	pub(crate) async fn insert_or_update(&self, object: SO) -> Result<bool, Error> {
+		self.insert_or_update_with(object, |updated, _| updated).await
+	}
+
+	/// Inserts `object` or merges it into an existing object, returning whether the store changed
+	/// and the effective object after the merge.
+	pub(crate) async fn insert_or_update_and_get(&self, object: SO) -> Result<(bool, SO), Error> {
+		self.insert_or_update_with(object, |updated, stored_object| {
+			(updated, stored_object.clone())
+		})
+		.await
+	}
+
+	async fn insert_or_update_with<R>(
+		&self, object: SO, result_fn: impl FnOnce(bool, &SO) -> R,
+	) -> Result<R, Error> {
 		let _guard = self.mutation_lock.lock().await;
 
 		let id = object.id();
-		let data_to_persist = {
+		let updated_object = {
 			let locked_objects = self.objects.lock().expect("lock");
 			if let Some(existing_object) = locked_objects.get(&id) {
 				let mut updated_object = existing_object.clone();
 				let updated = updated_object.update(object.to_update());
 				if updated {
-					Some(updated_object)
+					updated_object
 				} else {
-					None
+					return Ok(result_fn(false, existing_object));
 				}
 			} else {
-				Some(object)
+				object
 			}
 		};
 
-		match data_to_persist {
-			Some(updated_object) => {
-				self.persist(&updated_object).await?;
-				let mut locked_objects = self.objects.lock().expect("lock");
-				locked_objects.insert(id, updated_object);
-				Ok(true)
-			},
-			None => Ok(false),
-		}
+		self.persist(&updated_object).await?;
+		let mut locked_objects = self.objects.lock().expect("lock");
+		let stored_object = locked_objects.entry(id).insert_entry(updated_object).into_mut();
+		Ok(result_fn(true, stored_object))
 	}
 
 	pub(crate) async fn remove(&self, id: &SO::Id) -> Result<(), Error> {
@@ -319,6 +329,52 @@ mod tests {
 		(2, data, required),
 	});
 
+	struct MergingTestObjectUpdate {
+		id: TestObjectId,
+		data: [u8; 3],
+	}
+
+	impl StorableObjectUpdate<MergingTestObject> for MergingTestObjectUpdate {
+		fn id(&self) -> TestObjectId {
+			self.id
+		}
+	}
+
+	#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+	struct MergingTestObject {
+		id: TestObjectId,
+		data: [u8; 3],
+		preserved_data: [u8; 3],
+	}
+
+	impl StorableObject for MergingTestObject {
+		type Id = TestObjectId;
+		type Update = MergingTestObjectUpdate;
+
+		fn id(&self) -> Self::Id {
+			self.id
+		}
+
+		fn update(&mut self, update: Self::Update) -> bool {
+			if self.data != update.data {
+				self.data = update.data;
+				true
+			} else {
+				false
+			}
+		}
+
+		fn to_update(&self) -> Self::Update {
+			Self::Update { id: self.id, data: self.data }
+		}
+	}
+
+	impl_writeable_tlv_based!(MergingTestObject, {
+		(0, id, required),
+		(2, data, required),
+		(4, preserved_data, required),
+	});
+
 	struct FailingStore;
 
 	impl KVStore for FailingStore {
@@ -479,7 +535,6 @@ mod tests {
 			store,
 			logger,
 		);
-
 		// The closure sees the current entry and derives the new state from it.
 		let result = data_store
 			.mutate(&id, |existing| {
@@ -558,6 +613,28 @@ mod tests {
 			data_store.mutate(&new_id, |_| Some(new_object)).await
 		);
 		assert!(data_store.get(&new_id).is_none());
+	}
+
+	#[tokio::test]
+	async fn insert_or_update_and_get_returns_merged_object() {
+		let store: Arc<DynStore> = Arc::new(DynStoreWrapper(InMemoryStore::new()));
+		let logger = Arc::new(TestLogger::new());
+		let id = TestObjectId { id: [42u8; 4] };
+		let existing = MergingTestObject { id, data: [23u8; 3], preserved_data: [24u8; 3] };
+		let data_store = DataStore::new(
+			vec![existing],
+			"datastore_test_primary".to_string(),
+			"datastore_test_secondary".to_string(),
+			store,
+			logger,
+		);
+
+		let supplied = MergingTestObject { id, data: [25u8; 3], preserved_data: [26u8; 3] };
+		let expected = MergingTestObject { data: supplied.data, ..existing };
+		assert_eq!(Ok((true, expected)), data_store.insert_or_update_and_get(supplied).await);
+
+		let unchanged = MergingTestObject { preserved_data: [27u8; 3], ..expected };
+		assert_eq!(Ok((false, expected)), data_store.insert_or_update_and_get(unchanged).await);
 	}
 
 	#[tokio::test]
