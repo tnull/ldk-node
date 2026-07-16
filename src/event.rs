@@ -285,6 +285,8 @@ pub enum Event {
 	///
 	/// This is only emitted for wallet transactions which were not classified as channel
 	/// funding, splices, closes, sweeps, or other LDK-driven chain activity.
+	/// Transactions recorded by earlier LDK Node versions may lack classification metadata and
+	/// can still emit this event when they settle.
 	///
 	/// It's guaranteed to have reached at least [`ANTI_REORG_DELAY`] confirmations.
 	///
@@ -296,9 +298,11 @@ pub enum Event {
 		txid: Txid,
 		/// The value, in thousandths of a satoshi, that was sent.
 		amount_msat: u64,
+		/// The fees paid for the transaction, in thousandths of a satoshi, if known.
+		fee_paid_msat: Option<u64>,
 		/// The hash of the block in which the transaction was confirmed.
 		block_hash: BlockHash,
-		/// The height at which the block was confirmed.
+		/// The height of the block in which the transaction was confirmed.
 		block_height: u32,
 	},
 	/// An on-chain payment has been received.
@@ -324,7 +328,7 @@ pub enum Event {
 		amount_msat: u64,
 		/// The hash of the block in which the transaction was confirmed.
 		block_hash: BlockHash,
-		/// The height at which the block was confirmed.
+		/// The height of the block in which the transaction was confirmed.
 		block_height: u32,
 	},
 	/// A channel splice with local inputs or outputs has been negotiated and the funding
@@ -442,6 +446,7 @@ impl_writeable_tlv_based_enum!(Event,
 		(4, amount_msat, required),
 		(6, block_hash, required),
 		(8, block_height, required),
+		(10, fee_paid_msat, option),
 	},
 	(11, OnchainPaymentReceived) => {
 		(0, payment_id, required),

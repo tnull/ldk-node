@@ -1941,6 +1941,7 @@ impl Wallet {
 				payment_id: payment.id,
 				txid,
 				amount_msat,
+				fee_paid_msat: payment.fee_paid_msat,
 				block_hash,
 				block_height,
 			},
