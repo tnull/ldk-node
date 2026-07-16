@@ -1171,8 +1171,8 @@ async fn onchain_send_receive() {
 
 	let addr_b = node_b.onchain_payment().new_address().unwrap();
 	let txid = node_a.onchain_payment().send_all_to_address(&addr_b, true, None).unwrap();
-	generate_blocks_and_wait(&bitcoind.client, &electrsd.client, 6).await;
 	wait_for_tx(&electrsd.client, txid).await;
+	generate_blocks_and_wait(&bitcoind.client, &electrsd.client, 6).await;
 
 	node_a.sync_wallets().unwrap();
 	node_b.sync_wallets().unwrap();
@@ -1196,8 +1196,8 @@ async fn onchain_send_receive() {
 
 	let addr_b = node_b.onchain_payment().new_address().unwrap();
 	let txid = node_a.onchain_payment().send_all_to_address(&addr_b, false, None).unwrap();
-	generate_blocks_and_wait(&bitcoind.client, &electrsd.client, 6).await;
 	wait_for_tx(&electrsd.client, txid).await;
+	generate_blocks_and_wait(&bitcoind.client, &electrsd.client, 6).await;
 
 	node_a.sync_wallets().unwrap();
 	node_b.sync_wallets().unwrap();
@@ -3348,8 +3348,8 @@ async fn unified_send_receive_bip21_uri() {
 		},
 	};
 
-	generate_blocks_and_wait(&bitcoind.client, &electrsd.client, 6).await;
 	wait_for_tx(&electrsd.client, txid).await;
+	generate_blocks_and_wait(&bitcoind.client, &electrsd.client, 6).await;
 
 	node_a.sync_wallets().unwrap();
 	node_b.sync_wallets().unwrap();
