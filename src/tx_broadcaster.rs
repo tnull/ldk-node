@@ -20,16 +20,30 @@ use crate::Error;
 
 const BCAST_PACKAGE_QUEUE_SIZE: usize = 256;
 
+#[derive(Clone)]
+pub(crate) enum TransactionType {
+	/// Transaction types supplied by LDK.
+	Lightning(LdkTransactionType),
+}
+
+impl From<LdkTransactionType> for TransactionType {
+	fn from(value: LdkTransactionType) -> Self {
+		Self::Lightning(value)
+	}
+}
+
 /// A package of transactions that LDK handed to the broadcaster in one `broadcast_transactions`
 /// call, along with each transaction's type. Queued until the background task classifies and
 /// broadcasts it. Built only via [`BroadcastPackage::new`] from such a call, so unrelated
 /// transactions can't be grouped into one package by accident.
-pub(crate) struct BroadcastPackage(Vec<(Transaction, Option<LdkTransactionType>)>);
+pub(crate) struct BroadcastPackage(Vec<(Transaction, Option<TransactionType>)>);
 
 impl BroadcastPackage {
 	/// Builds a package from the transactions of a single `broadcast_transactions` call.
 	fn new(txs: &[(&Transaction, LdkTransactionType)]) -> Self {
-		Self(txs.iter().map(|(tx, tx_type)| ((*tx).clone(), Some(tx_type.clone()))).collect())
+		Self(
+			txs.iter().map(|(tx, tx_type)| ((*tx).clone(), Some(tx_type.clone().into()))).collect(),
+		)
 	}
 
 	/// Builds a package for wallet-originated broadcasts that have no LDK classification.
@@ -38,7 +52,7 @@ impl BroadcastPackage {
 	}
 
 	/// The packaged transactions and their types, for classification.
-	fn transactions(&self) -> &[(Transaction, Option<LdkTransactionType>)] {
+	fn transactions(&self) -> &[(Transaction, Option<TransactionType>)] {
 		&self.0
 	}
 
@@ -142,7 +156,7 @@ where
 		let wallet_opt = self.wallet.lock().expect("lock").as_ref().and_then(Weak::upgrade);
 		if let Some(wallet) = wallet_opt {
 			for (tx, tx_type) in package.transactions() {
-				if let Some(tx_type) = tx_type {
+				if let Some(TransactionType::Lightning(tx_type)) = tx_type {
 					wallet.classify_broadcast(tx, tx_type).await?;
 				}
 			}
