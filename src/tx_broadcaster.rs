@@ -22,6 +22,8 @@ const BCAST_PACKAGE_QUEUE_SIZE: usize = 256;
 
 #[derive(Clone)]
 pub(crate) enum TransactionType {
+	/// A regular on-chain payment created by the node's wallet.
+	OnchainPayment,
 	/// Transaction types supplied by LDK.
 	Lightning(LdkTransactionType),
 }
@@ -32,27 +34,24 @@ impl From<LdkTransactionType> for TransactionType {
 	}
 }
 
-/// A package of transactions that LDK handed to the broadcaster in one `broadcast_transactions`
-/// call, along with each transaction's type. Queued until the background task classifies and
-/// broadcasts it. Built only via [`BroadcastPackage::new`] from such a call, so unrelated
-/// transactions can't be grouped into one package by accident.
-pub(crate) struct BroadcastPackage(Vec<(Transaction, Option<TransactionType>)>);
+/// A package of transactions and their types, queued until the background task classifies and
+/// broadcasts them. LDK packages preserve the transactions from one `broadcast_transactions`
+/// call, while a regular on-chain payment is packaged by itself.
+pub(crate) struct BroadcastPackage(Vec<(Transaction, TransactionType)>);
 
 impl BroadcastPackage {
 	/// Builds a package from the transactions of a single `broadcast_transactions` call.
 	fn new(txs: &[(&Transaction, LdkTransactionType)]) -> Self {
-		Self(
-			txs.iter().map(|(tx, tx_type)| ((*tx).clone(), Some(tx_type.clone().into()))).collect(),
-		)
+		Self(txs.iter().map(|(tx, tx_type)| ((*tx).clone(), tx_type.clone().into())).collect())
 	}
 
-	/// Builds a package for wallet-originated broadcasts that have no LDK classification.
-	fn unclassified(tx: Transaction) -> Self {
-		Self(vec![(tx, None)])
+	/// Builds a package for a regular on-chain payment created by the node's wallet.
+	fn onchain_payment(tx: Transaction) -> Self {
+		Self(vec![(tx, TransactionType::OnchainPayment)])
 	}
 
 	/// The packaged transactions and their types, for classification.
-	fn transactions(&self) -> &[(Transaction, Option<TransactionType>)] {
+	fn transactions(&self) -> &[(Transaction, TransactionType)] {
 		&self.0
 	}
 
@@ -112,9 +111,9 @@ where
 {
 	queue_sender: mpsc::Sender<BroadcastPackage>,
 	queue_receiver: Mutex<mpsc::Receiver<BroadcastPackage>>,
-	/// Weak handle to the [`Wallet`] that classifies funding broadcasts (channel opens and
-	/// splices) into payment records. Remains `None` while the builder is wiring the node up,
-	/// during which broadcasts are forwarded to the queue but no payment record is written.
+	/// Weak handle to the [`Wallet`] that classifies broadcasts into payment records. Remains
+	/// `None` while the builder is wiring the node up, during which broadcasts are forwarded to
+	/// the queue but no payment record is written.
 	/// [`Self::set_wallet`] installs the handle once the [`Wallet`] exists.
 	wallet: StdMutex<Option<Weak<Wallet>>>,
 	logger: L,
@@ -134,9 +133,8 @@ where
 		}
 	}
 
-	/// Installs the [`Wallet`] handle used to classify funding broadcasts (channel opens and
-	/// splices) into payment records. Called once the builder has constructed both the
-	/// broadcaster and the wallet.
+	/// Installs the [`Wallet`] handle used to classify broadcasts into payment records. Called
+	/// once the builder has constructed both the broadcaster and the wallet.
 	pub(crate) fn set_wallet(&self, wallet: Weak<Wallet>) {
 		*self.wallet.lock().expect("lock") = Some(wallet);
 	}
@@ -156,16 +154,14 @@ where
 		let wallet_opt = self.wallet.lock().expect("lock").as_ref().and_then(Weak::upgrade);
 		if let Some(wallet) = wallet_opt {
 			for (tx, tx_type) in package.transactions() {
-				if let Some(TransactionType::Lightning(tx_type)) = tx_type {
-					wallet.classify_broadcast(tx, tx_type).await?;
-				}
+				wallet.classify_broadcast(tx, tx_type).await?;
 			}
 		}
 		Ok(package)
 	}
 
-	pub(crate) fn broadcast_unclassified_transaction(&self, tx: Transaction) {
-		self.queue_sender.try_send(BroadcastPackage::unclassified(tx)).unwrap_or_else(|e| {
+	pub(crate) fn broadcast_onchain_payment(&self, tx: Transaction) {
+		self.queue_sender.try_send(BroadcastPackage::onchain_payment(tx)).unwrap_or_else(|e| {
 			log_error!(self.logger, "Failed to broadcast transactions: {}", e);
 		});
 	}

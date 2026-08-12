@@ -64,6 +64,7 @@ use crate::payment::{
 	PendingPaymentDetails, TransactionType,
 };
 use crate::runtime::Runtime;
+use crate::tx_broadcaster::TransactionType as BroadcastTransactionType;
 use crate::types::{Broadcaster, PaymentStore, PendingPaymentStore};
 use crate::{ChainSource, Error};
 
@@ -478,7 +479,7 @@ impl Wallet {
 						if !txs_to_broadcast.is_empty() {
 							let tx_count = txs_to_broadcast.len();
 							for tx in txs_to_broadcast {
-								self.broadcaster.broadcast_unclassified_transaction(tx);
+								self.broadcaster.broadcast_onchain_payment(tx);
 							}
 							log_info!(
 								self.logger,
@@ -1232,7 +1233,7 @@ impl Wallet {
 		})?;
 
 		let txid = tx.compute_txid();
-		self.broadcaster.broadcast_unclassified_transaction(tx);
+		self.broadcaster.broadcast_onchain_payment(tx);
 
 		match send_amount {
 			OnchainSendAmount::ExactRetainingReserve { amount_sats, .. } => {
@@ -1531,25 +1532,30 @@ impl Wallet {
 		Ok(tx)
 	}
 
-	/// Classifies an on-chain broadcast handed to the broadcaster by LDK, recording a payment for it
-	/// before it is sent when it affects this node's wallet.
+	/// Classifies an on-chain broadcast, recording a payment for it before it is sent when it
+	/// affects this node's wallet.
 	pub(crate) async fn classify_broadcast(
-		&self, tx: &Transaction, tx_type: &LdkTransactionType,
+		&self, tx: &Transaction, tx_type: &BroadcastTransactionType,
 	) -> Result<(), Error> {
 		match tx_type {
-			LdkTransactionType::Funding { channels } => {
-				self.classify_funding(tx, channels, tx_type.clone().into()).await
+			BroadcastTransactionType::OnchainPayment => {
+				self.classify_regular_broadcast(tx, None).await
 			},
-			LdkTransactionType::InteractiveFunding { candidates } => {
-				self.classify_interactive_funding(tx, candidates, tx_type.clone().into()).await
+			BroadcastTransactionType::Lightning(
+				tx_type @ LdkTransactionType::Funding { channels },
+			) => self.classify_funding(tx, channels, tx_type.clone().into()).await,
+			BroadcastTransactionType::Lightning(
+				tx_type @ LdkTransactionType::InteractiveFunding { candidates },
+			) => self.classify_interactive_funding(tx, candidates, tx_type.clone().into()).await,
+			BroadcastTransactionType::Lightning(LdkTransactionType::UnilateralClose { .. }) => {
+				Ok(())
 			},
-			LdkTransactionType::UnilateralClose { .. } => Ok(()),
-			LdkTransactionType::CooperativeClose { .. }
-			| LdkTransactionType::AnchorBump { .. }
-			| LdkTransactionType::Claim { .. }
-			| LdkTransactionType::Sweep { .. } => {
-				self.classify_regular_broadcast(tx, tx_type.clone().into()).await
-			},
+			BroadcastTransactionType::Lightning(
+				tx_type @ (LdkTransactionType::CooperativeClose { .. }
+				| LdkTransactionType::AnchorBump { .. }
+				| LdkTransactionType::Claim { .. }
+				| LdkTransactionType::Sweep { .. }),
+			) => self.classify_regular_broadcast(tx, Some(tx_type.clone().into())).await,
 		}
 	}
 
@@ -1690,12 +1696,13 @@ impl Wallet {
 		Ok(())
 	}
 
-	/// Records a non-funding LDK broadcast as an on-chain payment, tagged with its transaction type.
-	/// Wallet sync later refreshes confirmation status while preserving the type.
+	/// Records a regular wallet payment or non-funding LDK broadcast as an on-chain payment.
+	/// Wallet sync later refreshes confirmation status while preserving any LDK transaction type.
 	async fn classify_regular_broadcast(
-		&self, tx: &Transaction, tx_type: TransactionType,
+		&self, tx: &Transaction, tx_type: Option<TransactionType>,
 	) -> Result<(), Error> {
 		let txid = tx.compute_txid();
+		let is_onchain_payment = tx_type.is_none();
 		let (amount_msat, fee_paid_msat, direction) = self.onchain_payment_fields(tx);
 
 		if amount_msat == Some(0) && fee_paid_msat == Some(0) {
@@ -1709,17 +1716,30 @@ impl Wallet {
 
 		let details = PaymentDetails::new(
 			PaymentId(txid.to_byte_array()),
-			PaymentKind::Onchain {
-				txid,
-				status: ConfirmationStatus::Unconfirmed,
-				tx_type: Some(tx_type),
-			},
+			PaymentKind::Onchain { txid, status: ConfirmationStatus::Unconfirmed, tx_type },
 			amount_msat,
 			fee_paid_msat,
 			direction,
 			PaymentStatus::Pending,
 		);
-		self.payment_store.insert_or_update(details).await?;
+		if is_onchain_payment {
+			let id = details.id;
+			let inserted = self
+				.payment_store
+				.mutate(&id, |existing| existing.is_none().then_some(details))
+				.await?
+				.is_some();
+			if !inserted {
+				log_trace!(
+					self.logger,
+					"Not reclassifying regular on-chain payment broadcast {}",
+					txid,
+				);
+				return Ok(());
+			}
+		} else {
+			self.payment_store.insert_or_update(details).await?;
+		}
 		log_debug!(self.logger, "Recorded classified on-chain broadcast {}", txid);
 		Ok(())
 	}
@@ -2224,7 +2244,7 @@ impl Wallet {
 		self.payment_store.insert_or_update(new_payment).await?;
 		self.pending_payment_store.insert_or_update(pending_payment_store).await?;
 
-		self.broadcaster.broadcast_unclassified_transaction(fee_bumped_tx);
+		self.broadcaster.broadcast_onchain_payment(fee_bumped_tx);
 
 		log_info!(self.logger, "RBF successful: replaced {} with {}", txid, new_txid);
 
