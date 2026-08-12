@@ -83,7 +83,7 @@ pub(crate) mod ser;
 
 const DUST_LIMIT_SATS: u64 = 546;
 
-/// The number of external addresses kept revealed, persisted, and ready for handout via
+/// The number of addresses per keychain kept revealed, persisted, and ready for handout via
 /// [`Wallet::pop_pooled_address`] and [`Wallet::get_new_address`].
 ///
 /// Each channel open consumes two pooled addresses (one for the destination script and one for
@@ -100,9 +100,7 @@ const DUST_LIMIT_SATS: u64 = 546;
 /// against the configured gap, as they did before the pool existed.
 pub(crate) const ADDRESS_POOL_TARGET_SIZE: usize = ADDRESS_POOL_SIZE as usize;
 
-/// A pool of pre-revealed external addresses whose derivation indices are already persisted,
-/// allowing LDK's synchronous [`SignerProvider`] callbacks to obtain fresh addresses without
-/// waiting on wallet persistence.
+/// A pool of pre-revealed addresses whose derivation indices are already persisted.
 struct AddressPool {
 	/// Addresses ready for handout: their reveal is durably persisted, so every chain sync path
 	/// watches their scripts.
@@ -117,9 +115,9 @@ impl AddressPool {
 	/// restarts from burning fresh derivation indices on every run.
 	fn new(
 		persisted_indices: Vec<u32>, wallet: &PersistedWallet<KVStoreWalletPersister>,
-		logger: &Logger,
+		keychain: KeychainKind, logger: &Logger,
 	) -> Self {
-		let last_revealed = wallet.derivation_index(KeychainKind::External);
+		let last_revealed = wallet.derivation_index(keychain);
 		let mut available = VecDeque::new();
 		for index in persisted_indices {
 			// Only trust indices the persisted wallet actually revealed: anything beyond
@@ -128,7 +126,7 @@ impl AddressPool {
 			// leaves it listing indices the wallet never revealed; the next refill re-derives
 			// them.
 			if last_revealed.map_or(false, |last| index <= last) {
-				let address = wallet.peek_address(KeychainKind::External, index).address;
+				let address = wallet.peek_address(keychain, index).address;
 				available.push_back((index, address));
 			} else {
 				log_error!(
@@ -146,7 +144,10 @@ pub(crate) struct Wallet {
 	// A BDK on-chain wallet.
 	inner: Mutex<PersistedWallet<KVStoreWalletPersister>>,
 	persister: tokio::sync::Mutex<KVStoreWalletPersister>,
+	/// External addresses handed to users via [`Wallet::get_new_address`].
 	address_pool: Mutex<AddressPool>,
+	/// Internal addresses handed to LDK via synchronous [`SignerProvider`] callbacks.
+	internal_address_pool: Mutex<AddressPool>,
 	// Serializes refill runs so concurrent pops never over-reveal.
 	address_pool_refill_lock: tokio::sync::Mutex<()>,
 	broadcaster: Arc<Broadcaster>,
@@ -173,12 +174,24 @@ pub(crate) struct Wallet {
 impl Wallet {
 	pub(crate) fn new(
 		wallet: bdk_wallet::PersistedWallet<KVStoreWalletPersister>,
-		wallet_persister: KVStoreWalletPersister, persisted_pool_indices: Vec<u32>,
-		broadcaster: Arc<Broadcaster>, fee_estimator: Arc<OnchainFeeEstimator>,
-		chain_source: Arc<ChainSource>, payment_store: Arc<PaymentStore>, runtime: Arc<Runtime>,
-		config: Arc<Config>, logger: Arc<Logger>, pending_payment_store: Arc<PendingPaymentStore>,
+		wallet_persister: KVStoreWalletPersister, persisted_external_pool_indices: Vec<u32>,
+		persisted_internal_pool_indices: Vec<u32>, broadcaster: Arc<Broadcaster>,
+		fee_estimator: Arc<OnchainFeeEstimator>, chain_source: Arc<ChainSource>,
+		payment_store: Arc<PaymentStore>, runtime: Arc<Runtime>, config: Arc<Config>,
+		logger: Arc<Logger>, pending_payment_store: Arc<PendingPaymentStore>,
 	) -> Self {
-		let address_pool = Mutex::new(AddressPool::new(persisted_pool_indices, &wallet, &logger));
+		let address_pool = Mutex::new(AddressPool::new(
+			persisted_external_pool_indices,
+			&wallet,
+			KeychainKind::External,
+			&logger,
+		));
+		let internal_address_pool = Mutex::new(AddressPool::new(
+			persisted_internal_pool_indices,
+			&wallet,
+			KeychainKind::Internal,
+			&logger,
+		));
 		let inner = Mutex::new(wallet);
 		let persister = tokio::sync::Mutex::new(wallet_persister);
 		let address_pool_refill_lock = tokio::sync::Mutex::new(());
@@ -186,6 +199,7 @@ impl Wallet {
 			inner,
 			persister,
 			address_pool,
+			internal_address_pool,
 			address_pool_refill_lock,
 			broadcaster,
 			fee_estimator,
@@ -675,7 +689,7 @@ impl Wallet {
 		// Force the record rewrite: a failed handout's push-back can leave the pool over its
 		// target size, and an early-returning refill would then leave the just-popped index
 		// durably recorded, handing the address out again after a restart.
-		match self.refill_address_pool_inner(true).await {
+		match self.refill_address_pool_inner(KeychainKind::External, true).await {
 			Ok(()) => Ok(address),
 			Err(e) => {
 				// The address was never handed out, so return it for the next caller rather
@@ -716,7 +730,7 @@ impl Wallet {
 	/// Its reveal is durable either way, so the script always stays watched — the cost is bounded
 	/// address reuse, not fund visibility.
 	pub(crate) fn pop_pooled_address(self: &Arc<Self>) -> Option<bitcoin::Address> {
-		let popped = self.address_pool.lock().expect("lock").available.pop_front();
+		let popped = self.internal_address_pool.lock().expect("lock").available.pop_front();
 
 		// Spawning cancellable lets shutdown abort an in-flight refill rather than wait on it.
 		// Aborting mid-refill (or dropping a refill spawned during shutdown) is safe: the reveals
@@ -724,7 +738,7 @@ impl Wallet {
 		// wallet, and nothing is published whose persistence the refill did not see complete.
 		let wallet = Arc::clone(self);
 		self.runtime.spawn_cancellable_background_task(async move {
-			if let Err(e) = wallet.refill_address_pool().await {
+			if let Err(e) = wallet.refill_address_pool_inner(KeychainKind::Internal, false).await {
 				log_error!(wallet.logger, "Failed to refill the address pool: {}", e);
 			}
 		});
@@ -735,17 +749,24 @@ impl Wallet {
 	/// Tops the address pool up to [`ADDRESS_POOL_TARGET_SIZE`], publishing newly revealed
 	/// addresses only after their reveal has been durably persisted.
 	pub(crate) async fn refill_address_pool(&self) -> Result<(), Error> {
-		self.refill_address_pool_inner(false).await
+		self.refill_address_pool_inner(KeychainKind::External, false).await?;
+		self.refill_address_pool_inner(KeychainKind::Internal, false).await
 	}
 
 	/// [`Wallet::refill_address_pool`], where `force_record_rewrite` makes the pool-record
 	/// rewrite unconditional: a pool at or over its target size otherwise skips it, which after
 	/// a pop would leave the popped index in the record.
-	async fn refill_address_pool_inner(&self, force_record_rewrite: bool) -> Result<(), Error> {
+	async fn refill_address_pool_inner(
+		&self, keychain: KeychainKind, force_record_rewrite: bool,
+	) -> Result<(), Error> {
 		let _refill_guard = self.address_pool_refill_lock.lock().await;
+		let address_pool = match keychain {
+			KeychainKind::External => &self.address_pool,
+			KeychainKind::Internal => &self.internal_address_pool,
+		};
 
 		if !force_record_rewrite {
-			let locked_pool = self.address_pool.lock().expect("lock");
+			let locked_pool = address_pool.lock().expect("lock");
 			if locked_pool.unpublished.is_empty()
 				&& locked_pool.available.len() >= ADDRESS_POOL_TARGET_SIZE
 			{
@@ -754,13 +775,17 @@ impl Wallet {
 		}
 
 		let mut locked_persister = self.persister.lock().await;
-		let indices = {
+		{
 			let mut locked_wallet = self.inner.lock().expect("lock");
-			let mut locked_pool = self.address_pool.lock().expect("lock");
+			let mut locked_pool = address_pool.lock().expect("lock");
 			let needed = ADDRESS_POOL_TARGET_SIZE
 				.saturating_sub(locked_pool.available.len() + locked_pool.unpublished.len());
 			for _ in 0..needed {
-				let address_info = locked_wallet.reveal_next_address(KeychainKind::External);
+				let address_info = locked_wallet.reveal_next_address(keychain);
+				if keychain == KeychainKind::Internal {
+					let marked = locked_wallet.mark_used(keychain, address_info.index);
+					debug_assert!(marked, "fresh internal pool address must be unused");
+				}
 				locked_pool.unpublished.push((address_info.index, address_info.address));
 			}
 			// Hand the reveals straight to the persister: this refill may run as a task the
@@ -768,13 +793,8 @@ impl Wallet {
 			// would lose the reveals if the abort lands there — a later refill run would then
 			// publish addresses no persisted wallet state covers.
 			locked_persister.stage(locked_wallet.take_staged().unwrap_or_default());
-			locked_pool
-				.available
-				.iter()
-				.chain(locked_pool.unpublished.iter())
-				.map(|(index, _)| *index)
-				.collect::<Vec<u32>>()
-		};
+		}
+		let (external_indices, internal_indices) = self.address_pool_indices();
 
 		// Persist the pool record before the reveals. A crash between the two writes then leaves
 		// record entries the persisted wallet doesn't cover, which reloading drops and the next
@@ -789,10 +809,12 @@ impl Wallet {
 		// persist call or die with the process, in which case the next run re-derives the same
 		// indices. (An unrelated persist call can still flush them before the record retry
 		// succeeds, so the window is narrowed, not closed.)
-		locked_persister.persist_address_pool(indices).await.map_err(|e| {
-			log_error!(self.logger, "Failed to persist address pool: {}", e);
-			Error::PersistenceFailed
-		})?;
+		locked_persister.persist_address_pool(external_indices, internal_indices).await.map_err(
+			|e| {
+				log_error!(self.logger, "Failed to persist address pool: {}", e);
+				Error::PersistenceFailed
+			},
+		)?;
 		// On failure the reveals stay in `unpublished` (never handed out) and the persister
 		// retains the change set, so the next refill run retries both.
 		locked_persister.persist_staged().await.map_err(|e| {
@@ -801,7 +823,7 @@ impl Wallet {
 		})?;
 
 		// Both writes are durable, so the addresses may be handed out.
-		let mut locked_pool = self.address_pool.lock().expect("lock");
+		let mut locked_pool = address_pool.lock().expect("lock");
 		let unpublished = core::mem::take(&mut locked_pool.unpublished);
 		locked_pool.available.extend(unpublished);
 		Ok(())
@@ -814,16 +836,17 @@ impl Wallet {
 	/// index outside the pool.
 	async fn rewrite_pool_record(&self) {
 		let mut locked_persister = self.persister.lock().await;
-		let indices: Vec<u32> = {
-			let locked_pool = self.address_pool.lock().expect("lock");
-			locked_pool
-				.available
-				.iter()
-				.chain(locked_pool.unpublished.iter())
-				.map(|(index, _)| *index)
-				.collect()
+		let (external_indices, internal_indices) = self.address_pool_indices();
+		let _ = locked_persister.persist_address_pool(external_indices, internal_indices).await;
+	}
+
+	fn address_pool_indices(&self) -> (Vec<u32>, Vec<u32>) {
+		let collect = |pool: &AddressPool| {
+			pool.available.iter().chain(pool.unpublished.iter()).map(|(index, _)| *index).collect()
 		};
-		let _ = locked_persister.persist_address_pool(indices).await;
+		let external_indices = collect(&self.address_pool.lock().expect("lock"));
+		let internal_indices = collect(&self.internal_address_pool.lock().expect("lock"));
+		(external_indices, internal_indices)
 	}
 
 	pub(crate) async fn get_new_internal_address(&self) -> Result<bitcoin::Address, Error> {
@@ -2756,12 +2779,14 @@ mod tests {
 		));
 		let runtime = Arc::new(Runtime::new(Arc::clone(&logger)).unwrap());
 
-		let persisted_pool_indices = persist::read_address_pool(&*store, &*logger).await.unwrap();
+		let (persisted_external_pool_indices, persisted_internal_pool_indices) =
+			persist::read_address_pool(&*store, &*logger).await.unwrap();
 
 		Arc::new(Wallet::new(
 			bdk_wallet,
 			wallet_persister,
-			persisted_pool_indices,
+			persisted_external_pool_indices,
+			persisted_internal_pool_indices,
 			broadcaster,
 			fee_estimator,
 			Arc::new(chain_source),
@@ -2845,7 +2870,7 @@ mod tests {
 		// Corrupt the persisted record with an index the wallet never revealed.
 		let logger = Arc::new(Logger::new_log_facade());
 		let mut persister = KVStoreWalletPersister::new(Arc::clone(&store), logger);
-		persister.persist_address_pool(vec![5, 100]).await.unwrap();
+		persister.persist_address_pool(vec![5, 100], Vec::new()).await.unwrap();
 
 		let wallet = new_test_wallet(Arc::clone(&store), true).await;
 		wallet.refill_address_pool().await.unwrap();
@@ -2872,8 +2897,17 @@ mod tests {
 		assert!(keys_manager.get_shutdown_scriptpubkey().is_err());
 
 		wallet.refill_address_pool().await.unwrap();
-		assert!(keys_manager.get_destination_script([0u8; 32]).is_ok());
-		assert!(keys_manager.get_shutdown_scriptpubkey().is_ok());
+		let destination_script = keys_manager.get_destination_script([0u8; 32]).unwrap();
+		let shutdown_script = keys_manager.get_shutdown_scriptpubkey().unwrap().into_inner();
+		let locked_wallet = wallet.inner.lock().unwrap();
+		assert!(matches!(
+			locked_wallet.derivation_of_spk(destination_script),
+			Some((KeychainKind::Internal, _))
+		));
+		assert!(matches!(
+			locked_wallet.derivation_of_spk(shutdown_script),
+			Some((KeychainKind::Internal, _))
+		));
 	}
 
 	/// An in-memory store that snapshots its full contents after every completed write, letting

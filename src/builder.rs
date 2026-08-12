@@ -1758,7 +1758,8 @@ fn build_with_store_internal(
 		},
 	};
 
-	let persisted_pool_indices = match address_pool_res {
+	let (persisted_external_pool_indices, persisted_internal_pool_indices) = match address_pool_res
+	{
 		Ok(indices) => indices,
 		Err(e) => {
 			log_error!(logger, "Failed to read address pool data from store: {}", e);
@@ -1769,7 +1770,8 @@ fn build_with_store_internal(
 	let wallet = Arc::new(Wallet::new(
 		bdk_wallet,
 		wallet_persister,
-		persisted_pool_indices,
+		persisted_external_pool_indices,
+		persisted_internal_pool_indices,
 		Arc::clone(&tx_broadcaster),
 		Arc::clone(&fee_estimator),
 		Arc::clone(&chain_source),

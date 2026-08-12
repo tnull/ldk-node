@@ -36,11 +36,13 @@ use crate::types::DynStore;
 ///
 /// [`ChangeSet::indexer`]: bdk_wallet::ChangeSet::indexer
 struct AddressPoolRecord {
-	indices: Vec<u32>,
+	external_indices: Vec<u32>,
+	internal_indices: Vec<u32>,
 }
 
 impl_writeable_tlv_based!(AddressPoolRecord, {
-	(0, indices, required_vec),
+	(0, external_indices, required_vec),
+	(2, internal_indices, optional_vec),
 });
 
 pub(crate) struct KVStoreWalletPersister {
@@ -230,9 +232,9 @@ impl KVStoreWalletPersister {
 	///
 	/// See [`AddressPoolRecord`] for what readers may assume about the persisted indices.
 	pub(super) async fn persist_address_pool(
-		&mut self, indices: Vec<u32>,
+		&mut self, external_indices: Vec<u32>, internal_indices: Vec<u32>,
 	) -> Result<(), std::io::Error> {
-		let record = AddressPoolRecord { indices };
+		let record = AddressPoolRecord { external_indices, internal_indices };
 		KVStore::write(
 			&*self.kv_store,
 			BDK_WALLET_ADDRESS_POOL_PRIMARY_NAMESPACE,
@@ -248,11 +250,11 @@ impl KVStoreWalletPersister {
 	}
 }
 
-/// Reads the persisted address-pool derivation indices, or an empty list if none were
-/// persisted yet.
+/// Reads the persisted external and internal address-pool derivation indices, or empty lists if
+/// none were persisted yet.
 pub(crate) async fn read_address_pool(
 	kv_store: &DynStore, logger: &Logger,
-) -> Result<Vec<u32>, std::io::Error> {
+) -> Result<(Vec<u32>, Vec<u32>), std::io::Error> {
 	let reader = match KVStore::read(
 		kv_store,
 		BDK_WALLET_ADDRESS_POOL_PRIMARY_NAMESPACE,
@@ -262,7 +264,9 @@ pub(crate) async fn read_address_pool(
 	.await
 	{
 		Ok(reader) => reader,
-		Err(e) if e.kind() == lightning::io::ErrorKind::NotFound => return Ok(Vec::new()),
+		Err(e) if e.kind() == lightning::io::ErrorKind::NotFound => {
+			return Ok((Vec::new(), Vec::new()))
+		},
 		Err(e) => return Err(e.into()),
 	};
 	let record = match AddressPoolRecord::read(&mut &*reader) {
@@ -272,10 +276,10 @@ pub(crate) async fn read_address_pool(
 			// future version's incompatible encoding) at worst costs the pool's indices, so
 			// degrade to an empty pool rather than failing the node's startup.
 			log_error!(logger, "Dropping undecodable address pool: {}", e);
-			return Ok(Vec::new());
+			return Ok((Vec::new(), Vec::new()));
 		},
 	};
-	Ok(record.indices)
+	Ok((record.external_indices, record.internal_indices))
 }
 
 impl AsyncWalletPersister for KVStoreWalletPersister {
