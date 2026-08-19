@@ -8,6 +8,9 @@
 - The language bindings now expose `PublicKey` as an object instead of a string alias. Public keys
   must be passed through its fallible constructor, which returns `NodeError::InvalidPublicKey` for
   invalid input.
+- The language bindings now expose `SocketAddress` as an object instead of a string alias. Socket
+  addresses must be passed through its fallible constructor, which returns
+  `NodeError::InvalidSocketAddress` for invalid input.
 - `generate_entropy_mnemonic` has been removed. Use `bip39::Mnemonic::generate` in Rust and
   `Mnemonic::generate` in the language bindings instead.
 - Migrating between storage backends does not preserve the relative creation order of

@@ -154,7 +154,7 @@ use lightning::ln::chan_utils::FUNDING_TRANSACTION_WITNESS_WEIGHT;
 use lightning::ln::channel_state::ChannelDetails as LdkChannelDetails;
 pub use lightning::ln::channel_state::ChannelShutdownState;
 use lightning::ln::channelmanager::PaymentId;
-use lightning::ln::msgs::{BaseMessageHandler, SocketAddress};
+use lightning::ln::msgs::{BaseMessageHandler, SocketAddress as LdkSocketAddress};
 use lightning::ln::peer_handler::CustomMessageHandler;
 use lightning::routing::gossip::NodeAlias;
 use lightning::sign::EntropySource;
@@ -185,7 +185,8 @@ pub use tokio;
 use types::{
 	Broadcaster, BumpTransactionEventHandler, ChainMonitor, ChannelManager, DynStore, Graph,
 	HRNResolver, KeysManager, OnionMessenger, PaymentStore, PeerManager,
-	PublicKey as BindingPublicKey, Router, Scorer, Sweeper, Wallet,
+	PublicKey as BindingPublicKey, Router, Scorer, SocketAddress as BindingSocketAddress, Sweeper,
+	Wallet,
 };
 pub use types::{
 	ChannelCounterparty, ChannelDetails, CustomTlvRecord, PeerDetails, ReserveType, UserChannelId,
@@ -616,6 +617,11 @@ impl Node {
 								debug_assert!(false, "We checked whether the node may announce, so listening addresses should always be set");
 								continue;
 							};
+							let addresses = addresses
+								.iter()
+								.map(maybe_deref)
+								.cloned()
+								.collect();
 
 							if let Some(node_alias) = node_alias.as_ref() {
 								bcast_pm.broadcast_node_announcement([0; 3], node_alias.0, addresses);
@@ -1006,12 +1012,12 @@ impl Node {
 	}
 
 	/// Returns our own listening addresses.
-	pub fn listening_addresses(&self) -> Option<Vec<SocketAddress>> {
+	pub fn listening_addresses(&self) -> Option<Vec<BindingSocketAddress>> {
 		self.config.listening_addresses.clone()
 	}
 
 	/// Returns the addresses that the node will announce to the network.
-	pub fn announcement_addresses(&self) -> Option<Vec<SocketAddress>> {
+	pub fn announcement_addresses(&self) -> Option<Vec<BindingSocketAddress>> {
 		self.config
 			.announcement_addresses
 			.clone()
@@ -1251,13 +1257,14 @@ impl Node {
 	///
 	/// If `persist` is set to `true`, we'll remember the peer and reconnect to it on restart.
 	pub fn connect(
-		&self, node_id: BindingPublicKey, address: SocketAddress, persist: bool,
+		&self, node_id: BindingPublicKey, address: BindingSocketAddress, persist: bool,
 	) -> Result<(), Error> {
 		if !*self.is_running.read().expect("lock") {
 			return Err(Error::NotRunning);
 		}
 
 		let node_id = *maybe_deref(&node_id);
+		let address = maybe_deref(&address).clone();
 		let peer_info = PeerInfo { node_id, address };
 
 		let con_node_id = peer_info.node_id;
@@ -1303,7 +1310,7 @@ impl Node {
 	}
 
 	fn open_channel_inner(
-		&self, node_id: Secp256k1PublicKey, address: SocketAddress,
+		&self, node_id: Secp256k1PublicKey, address: LdkSocketAddress,
 		channel_amount_sats: FundingAmount, push_to_counterparty_msat: Option<u64>,
 		channel_config: Option<ChannelConfig>, announce_for_forwarding: bool,
 		disable_counterparty_reserve: bool,
@@ -1490,12 +1497,12 @@ impl Node {
 	///
 	/// [`AnchorChannelsConfig::per_channel_reserve_sats`]: crate::config::AnchorChannelsConfig::per_channel_reserve_sats
 	pub fn open_channel(
-		&self, node_id: BindingPublicKey, address: SocketAddress, channel_amount_sats: u64,
+		&self, node_id: BindingPublicKey, address: BindingSocketAddress, channel_amount_sats: u64,
 		push_to_counterparty_msat: Option<u64>, channel_config: Option<ChannelConfig>,
 	) -> Result<UserChannelId, Error> {
 		self.open_channel_inner(
 			*maybe_deref(&node_id),
-			address,
+			maybe_deref(&address).clone(),
 			FundingAmount::Exact { amount_sats: channel_amount_sats },
 			push_to_counterparty_msat,
 			channel_config,
@@ -1526,7 +1533,7 @@ impl Node {
 	///
 	/// [`AnchorChannelsConfig::per_channel_reserve_sats`]: crate::config::AnchorChannelsConfig::per_channel_reserve_sats
 	pub fn open_announced_channel(
-		&self, node_id: BindingPublicKey, address: SocketAddress, channel_amount_sats: u64,
+		&self, node_id: BindingPublicKey, address: BindingSocketAddress, channel_amount_sats: u64,
 		push_to_counterparty_msat: Option<u64>, channel_config: Option<ChannelConfig>,
 	) -> Result<UserChannelId, Error> {
 		if let Err(err) = may_announce_channel(&self.config) {
@@ -1536,7 +1543,7 @@ impl Node {
 
 		self.open_channel_inner(
 			*maybe_deref(&node_id),
-			address,
+			maybe_deref(&address).clone(),
 			FundingAmount::Exact { amount_sats: channel_amount_sats },
 			push_to_counterparty_msat,
 			channel_config,
@@ -1560,12 +1567,12 @@ impl Node {
 	///
 	/// [`AnchorChannelsConfig::per_channel_reserve_sats`]: crate::config::AnchorChannelsConfig::per_channel_reserve_sats
 	pub fn open_channel_with_all(
-		&self, node_id: BindingPublicKey, address: SocketAddress,
+		&self, node_id: BindingPublicKey, address: BindingSocketAddress,
 		push_to_counterparty_msat: Option<u64>, channel_config: Option<ChannelConfig>,
 	) -> Result<UserChannelId, Error> {
 		self.open_channel_inner(
 			*maybe_deref(&node_id),
-			address,
+			maybe_deref(&address).clone(),
 			FundingAmount::Max,
 			push_to_counterparty_msat,
 			channel_config,
@@ -1593,7 +1600,7 @@ impl Node {
 	///
 	/// [`AnchorChannelsConfig::per_channel_reserve_sats`]: crate::config::AnchorChannelsConfig::per_channel_reserve_sats
 	pub fn open_announced_channel_with_all(
-		&self, node_id: BindingPublicKey, address: SocketAddress,
+		&self, node_id: BindingPublicKey, address: BindingSocketAddress,
 		push_to_counterparty_msat: Option<u64>, channel_config: Option<ChannelConfig>,
 	) -> Result<UserChannelId, Error> {
 		if let Err(err) = may_announce_channel(&self.config) {
@@ -1603,7 +1610,7 @@ impl Node {
 
 		self.open_channel_inner(
 			*maybe_deref(&node_id),
-			address,
+			maybe_deref(&address).clone(),
 			FundingAmount::Max,
 			push_to_counterparty_msat,
 			channel_config,
@@ -1632,12 +1639,12 @@ impl Node {
 	///
 	/// [`AnchorChannelsConfig::per_channel_reserve_sats`]: crate::config::AnchorChannelsConfig::per_channel_reserve_sats
 	pub fn open_0reserve_channel(
-		&self, node_id: BindingPublicKey, address: SocketAddress, channel_amount_sats: u64,
+		&self, node_id: BindingPublicKey, address: BindingSocketAddress, channel_amount_sats: u64,
 		push_to_counterparty_msat: Option<u64>, channel_config: Option<ChannelConfig>,
 	) -> Result<UserChannelId, Error> {
 		self.open_channel_inner(
 			*maybe_deref(&node_id),
-			address,
+			maybe_deref(&address).clone(),
 			FundingAmount::Exact { amount_sats: channel_amount_sats },
 			push_to_counterparty_msat,
 			channel_config,
@@ -1661,12 +1668,12 @@ impl Node {
 	///
 	/// Returns a [`UserChannelId`] allowing to locally keep track of the channel.
 	pub fn open_0reserve_channel_with_all(
-		&self, node_id: BindingPublicKey, address: SocketAddress,
+		&self, node_id: BindingPublicKey, address: BindingSocketAddress,
 		push_to_counterparty_msat: Option<u64>, channel_config: Option<ChannelConfig>,
 	) -> Result<UserChannelId, Error> {
 		self.open_channel_inner(
 			*maybe_deref(&node_id),
-			address,
+			maybe_deref(&address).clone(),
 			FundingAmount::Max,
 			push_to_counterparty_msat,
 			channel_config,
@@ -2306,8 +2313,12 @@ impl Node {
 
 			let is_persisted = stored_peer.is_some();
 			let is_connected = true;
-			let details =
-				PeerDetails { node_id: maybe_wrap(node_id), address, is_persisted, is_connected };
+			let details = PeerDetails {
+				node_id: maybe_wrap(node_id),
+				address: maybe_wrap(address),
+				is_persisted,
+				is_connected,
+			};
 			peers.push(details);
 		}
 
@@ -2320,7 +2331,7 @@ impl Node {
 
 			let details = PeerDetails {
 				node_id: maybe_wrap(p.node_id),
-				address: p.address,
+				address: maybe_wrap(p.address),
 				is_persisted: true,
 				is_connected: false,
 			};
@@ -2573,7 +2584,7 @@ pub(crate) fn new_channel_anchor_reserve_sats(
 async fn connect_and_discover_lsp(
 	connection_manager: &ConnectionManager<Arc<Logger>>,
 	liquidity_source: &LiquiditySource<Arc<Logger>>, logger: &Logger, node_id: Secp256k1PublicKey,
-	address: SocketAddress,
+	address: LdkSocketAddress,
 ) {
 	if let Err(e) = connection_manager.connect_peer_if_necessary(node_id, address).await {
 		log_debug!(logger, "Failed to connect to LSP {} for protocol discovery: {}", node_id, e);

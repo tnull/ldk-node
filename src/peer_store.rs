@@ -11,6 +11,7 @@ use std::sync::{Arc, RwLock};
 
 use bitcoin::secp256k1::PublicKey;
 use lightning::impl_writeable_tlv_based;
+use lightning::ln::msgs::SocketAddress;
 use lightning::util::persist::KVStore;
 use lightning::util::ser::{Readable, ReadableArgs, Writeable, Writer};
 
@@ -20,7 +21,7 @@ use crate::io::{
 };
 use crate::logger::{log_error, LdkLogger};
 use crate::types::DynStore;
-use crate::{Error, SocketAddress};
+use crate::Error;
 
 pub struct PeerStore<L: Deref>
 where

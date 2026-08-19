@@ -384,8 +384,7 @@ typedef string Txid;
 [Custom]
 typedef string BlockHash;
 
-[Custom]
-typedef string SocketAddress;
+typedef interface SocketAddress;
 
 typedef interface PublicKey;
 

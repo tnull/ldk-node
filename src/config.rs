@@ -13,7 +13,7 @@ use std::str::FromStr;
 use std::time::Duration;
 
 use bitcoin::Network;
-use lightning::ln::msgs::SocketAddress;
+use lightning::ln::msgs::SocketAddress as LdkSocketAddress;
 use lightning::routing::gossip::NodeAlias;
 use lightning::routing::router::RouteParametersConfig;
 use lightning::util::config::{
@@ -21,7 +21,7 @@ use lightning::util::config::{
 };
 
 use crate::logger::LogLevel;
-use crate::types::PublicKey;
+use crate::types::{PublicKey, SocketAddress};
 
 // Config defaults
 const DEFAULT_NETWORK: Network = Network::Bitcoin;
@@ -332,8 +332,10 @@ impl Default for HumanReadableNamesConfig {
 	fn default() -> Self {
 		HumanReadableNamesConfig {
 			resolution_config: HRNResolverConfig::Dns {
-				dns_server_address: SocketAddress::from_str("8.8.8.8:53")
-					.expect("Socket address conversion failed."),
+				dns_server_address: crate::ffi::maybe_wrap(
+					LdkSocketAddress::from_str("8.8.8.8:53")
+						.expect("Socket address conversion failed."),
+				),
 				enable_hrn_resolution_service: false,
 			},
 		}
@@ -830,7 +832,7 @@ mod tests {
 
 	use super::{
 		clamp_full_scan_stop_gap, may_announce_channel, AnnounceError, Config, ElectrumSyncConfig,
-		EsploraSyncConfig, NodeAlias, SocketAddress, DEFAULT_FULL_SCAN_STOP_GAP,
+		EsploraSyncConfig, LdkSocketAddress, NodeAlias, DEFAULT_FULL_SCAN_STOP_GAP,
 		MAX_FULL_SCAN_STOP_GAP, MIN_FULL_SCAN_STOP_GAP,
 	};
 
@@ -856,8 +858,10 @@ mod tests {
 		);
 
 		// Set announcement addresses with listening addresses unset
-		let announcement_address = SocketAddress::from_str("123.45.67.89:9735")
-			.expect("Socket address conversion failed.");
+		let announcement_address = crate::ffi::maybe_wrap(
+			LdkSocketAddress::from_str("123.45.67.89:9735")
+				.expect("Socket address conversion failed."),
+		);
 		node_config.announcement_addresses = Some(vec![announcement_address]);
 		assert_eq!(
 			may_announce_channel(&node_config),
@@ -872,8 +876,10 @@ mod tests {
 		);
 
 		// Set node alias with a non-empty list of listening addresses
-		let socket_address =
-			SocketAddress::from_str("localhost:8000").expect("Socket address conversion failed.");
+		let socket_address = crate::ffi::maybe_wrap(
+			LdkSocketAddress::from_str("localhost:8000")
+				.expect("Socket address conversion failed."),
+		);
 		if let Some(ref mut addresses) = node_config.listening_addresses {
 			addresses.push(socket_address);
 		}

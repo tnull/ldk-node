@@ -9,8 +9,6 @@
 
 use std::sync::Arc;
 
-#[cfg(feature = "uniffi")]
-use lightning::ln::msgs::SocketAddress;
 use lightning::routing::gossip::NodeId;
 #[cfg(feature = "uniffi")]
 use lightning::routing::gossip::RoutingFees;
@@ -18,6 +16,8 @@ use lightning::routing::gossip::RoutingFees;
 use lightning::routing::gossip::{ChannelInfo, NodeInfo};
 
 use crate::types::Graph;
+#[cfg(feature = "uniffi")]
+use crate::types::SocketAddress;
 
 /// Represents the network as nodes and channels between them.
 #[cfg_attr(feature = "uniffi", derive(uniffi::Object))]
@@ -169,7 +169,7 @@ impl From<lightning::routing::gossip::NodeAnnouncementInfo> for NodeAnnouncement
 		Self {
 			last_update: value.last_update(),
 			alias: value.alias().to_string(),
-			addresses: value.addresses().iter().cloned().collect(),
+			addresses: value.addresses().iter().cloned().map(crate::ffi::maybe_wrap).collect(),
 		}
 	}
 }

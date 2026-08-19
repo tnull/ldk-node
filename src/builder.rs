@@ -83,13 +83,13 @@ use crate::probing::{
 };
 use crate::runtime::{Runtime, RuntimeSpawner};
 use crate::tx_broadcaster::TransactionBroadcaster;
-#[cfg(feature = "uniffi")]
-use crate::types::PublicKey as BindingPublicKey;
 use crate::types::{
 	AsyncPersister, ChainMonitor, ChannelManager, DynStore, DynStoreRef, DynStoreWrapper,
 	GossipSync, Graph, HRNResolver, KeysManager, MessageRouter, OnionMessenger, PaymentStore,
 	PeerManager, PendingPaymentStore,
 };
+#[cfg(feature = "uniffi")]
+use crate::types::{PublicKey as BindingPublicKey, SocketAddress as BindingSocketAddress};
 use crate::wallet::persist::{read_address_pool, KVStoreWalletPersister};
 use crate::wallet::Wallet;
 use crate::{Node, NodeMetrics, PersistedNodeMetrics};
@@ -578,7 +578,8 @@ impl NodeBuilder {
 			return Err(BuildError::InvalidListeningAddresses);
 		}
 
-		self.config.listening_addresses = Some(listening_addresses);
+		self.config.listening_addresses =
+			Some(listening_addresses.into_iter().map(crate::ffi::maybe_wrap).collect());
 		Ok(self)
 	}
 
@@ -594,7 +595,8 @@ impl NodeBuilder {
 			return Err(BuildError::InvalidAnnouncementAddresses);
 		}
 
-		self.config.announcement_addresses = Some(announcement_addresses);
+		self.config.announcement_addresses =
+			Some(announcement_addresses.into_iter().map(crate::ffi::maybe_wrap).collect());
 		Ok(self)
 	}
 
@@ -604,7 +606,7 @@ impl NodeBuilder {
 	///
 	/// **Note**: If unset, connecting to peer OnionV3 addresses will fail.
 	pub fn set_tor_config(&mut self, tor_config: TorConfig) -> Result<&mut Self, BuildError> {
-		match tor_config.proxy_address {
+		match crate::ffi::maybe_deref(&tor_config.proxy_address) {
 			SocketAddress::OnionV2 { .. } | SocketAddress::OnionV3 { .. } => {
 				return Err(BuildError::InvalidTorProxyAddress);
 			},
@@ -1105,12 +1107,12 @@ impl ArcedNodeBuilder {
 	///
 	/// [bLIP-50 / LSPS0]: https://github.com/lightning/blips/blob/master/blip-0050.md
 	pub fn add_liquidity_source(
-		&self, node_id: BindingPublicKey, address: SocketAddress, token: Option<String>,
+		&self, node_id: BindingPublicKey, address: BindingSocketAddress, token: Option<String>,
 		trust_peer_0conf: bool,
 	) {
 		self.inner.write().expect("lock").add_liquidity_source(
 			*crate::ffi::maybe_deref(&node_id),
-			address,
+			crate::ffi::maybe_deref(&address).clone(),
 			token,
 			trust_peer_0conf,
 		);
@@ -1167,8 +1169,10 @@ impl ArcedNodeBuilder {
 
 	/// Sets the IP address and TCP port on which [`Node`] will listen for incoming network connections.
 	pub fn set_listening_addresses(
-		&self, listening_addresses: Vec<SocketAddress>,
+		&self, listening_addresses: Vec<BindingSocketAddress>,
 	) -> Result<(), BuildError> {
+		let listening_addresses =
+			listening_addresses.iter().map(crate::ffi::maybe_deref).cloned().collect();
 		self.inner.write().expect("lock").set_listening_addresses(listening_addresses).map(|_| ())
 	}
 
@@ -1178,8 +1182,10 @@ impl ArcedNodeBuilder {
 	///
 	/// [`listening_addresses`]: Self::set_listening_addresses
 	pub fn set_announcement_addresses(
-		&self, announcement_addresses: Vec<SocketAddress>,
+		&self, announcement_addresses: Vec<BindingSocketAddress>,
 	) -> Result<(), BuildError> {
+		let announcement_addresses =
+			announcement_addresses.iter().map(crate::ffi::maybe_deref).cloned().collect();
 		self.inner
 			.write()
 			.expect("lock")
@@ -1446,7 +1452,7 @@ fn build_with_store_internal(
 	}
 
 	if let Some(tor_config) = &config.tor_config {
-		match tor_config.proxy_address {
+		match crate::ffi::maybe_deref(&tor_config.proxy_address) {
 			SocketAddress::OnionV2 { .. } | SocketAddress::OnionV3 { .. } => {
 				return Err(BuildError::InvalidTorProxyAddress);
 			},
@@ -2063,7 +2069,7 @@ fn build_with_store_internal(
 			hrn_res as Arc<dyn DNSResolverMessageHandler + Send + Sync>
 		},
 		HRNResolverConfig::Dns { dns_server_address, enable_hrn_resolution_service, .. } => {
-			let addr = dns_server_address
+			let addr = crate::ffi::maybe_deref(dns_server_address)
 				.to_socket_addrs()
 				.map_err(|_| BuildError::DNSResolverSetupFailed)?
 				.next()

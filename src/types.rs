@@ -14,6 +14,10 @@ use std::sync::{Arc, Mutex};
 pub(crate) use bitcoin::secp256k1::PublicKey;
 #[cfg(feature = "uniffi")]
 pub(crate) type PublicKey = Arc<crate::ffi::PublicKey>;
+#[cfg(not(feature = "uniffi"))]
+pub(crate) use lightning::ln::msgs::SocketAddress;
+#[cfg(feature = "uniffi")]
+pub(crate) type SocketAddress = Arc<crate::ffi::SocketAddress>;
 use bitcoin::{OutPoint, ScriptBuf};
 use bitcoin_payment_instructions::amount::Amount as BPIAmount;
 use bitcoin_payment_instructions::dns_resolver::DNSHrnResolver;
@@ -26,7 +30,7 @@ use lightning::impl_writeable_tlv_based;
 use lightning::ln::channel_state::{
 	ChannelDetails as LdkChannelDetails, ChannelShutdownState, CounterpartyForwardingInfo,
 };
-use lightning::ln::msgs::{RoutingMessageHandler, SocketAddress};
+use lightning::ln::msgs::RoutingMessageHandler;
 use lightning::ln::peer_handler::IgnoringMessageHandler;
 use lightning::ln::types::ChannelId;
 use lightning::onion_message::dns_resolution::DNSResolverMessageHandler;

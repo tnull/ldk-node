@@ -271,6 +271,25 @@ class TestPublicKey(unittest.TestCase):
         self.assertIsInstance(error.exception, NodeError.InvalidPublicKey)
 
 
+class TestSocketAddress(unittest.TestCase):
+    def test_socket_address_object(self):
+        self.assertTrue(
+            hasattr(bindings.SocketAddress, "from_str"),
+            "SocketAddress should be exposed as an object",
+        )
+
+        socket_address_str = "127.0.0.1:9735"
+        socket_address = bindings.SocketAddress.from_str(socket_address_str)
+
+        self.assertIsInstance(socket_address, bindings.SocketAddress)
+        self.assertEqual(str(socket_address), socket_address_str)
+
+        with self.assertRaises(NodeError) as error:
+            bindings.SocketAddress.from_str("invalid")
+
+        self.assertIsInstance(error.exception, NodeError.InvalidSocketAddress)
+
+
 class TestLdkNode(unittest.TestCase):
     def setUp(self):
         bitcoin_cli("createwallet ldk_node_test")

@@ -27,6 +27,7 @@ pub use lightning::events::{ClosureReason, PaymentFailureReason};
 use lightning::ln::channel_state::{ChannelShutdownState, CounterpartyForwardingInfo};
 use lightning::ln::channelmanager::PaymentId;
 use lightning::ln::msgs::DecodeError;
+use lightning::ln::msgs::SocketAddress as LdkSocketAddress;
 pub use lightning::ln::types::ChannelId;
 use lightning::offers::invoice::Bolt12Invoice as LdkBolt12Invoice;
 pub use lightning::offers::offer::OfferId;
@@ -156,7 +157,7 @@ use crate::error::Error;
 pub use crate::liquidity::LSPS1OrderStatus;
 pub use crate::logger::{LogLevel, LogRecord, LogWriter};
 pub use crate::probing::ProbingConfig;
-use crate::{hex_utils, SocketAddress, UserChannelId};
+use crate::{hex_utils, UserChannelId};
 
 /// A secp256k1 public key.
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Object)]
@@ -1318,15 +1319,58 @@ impl std::fmt::Display for Mnemonic {
 	}
 }
 
-uniffi::custom_type!(SocketAddress, String, {
-	remote,
-	try_lift: |val| {
-		Ok(SocketAddress::from_str(&val).map_err(|_| Error::InvalidSocketAddress)?)
-	},
-	lower: |obj| {
-		obj.to_string()
-	},
-});
+/// An address which can be used to connect to a remote peer.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Object)]
+#[uniffi::export(Debug, Display, Eq)]
+pub struct SocketAddress {
+	pub(crate) inner: LdkSocketAddress,
+}
+
+#[uniffi::export]
+impl SocketAddress {
+	/// Constructs a socket address from its string representation.
+	#[uniffi::constructor]
+	pub fn from_str(socket_address_str: &str) -> Result<Self, Error> {
+		socket_address_str.parse()
+	}
+}
+
+impl FromStr for SocketAddress {
+	type Err = Error;
+
+	fn from_str(socket_address_str: &str) -> Result<Self, Self::Err> {
+		socket_address_str
+			.parse::<LdkSocketAddress>()
+			.map(|inner| Self { inner })
+			.map_err(|_| Error::InvalidSocketAddress)
+	}
+}
+
+impl From<LdkSocketAddress> for SocketAddress {
+	fn from(inner: LdkSocketAddress) -> Self {
+		Self { inner }
+	}
+}
+
+impl Deref for SocketAddress {
+	type Target = LdkSocketAddress;
+
+	fn deref(&self) -> &Self::Target {
+		&self.inner
+	}
+}
+
+impl AsRef<LdkSocketAddress> for SocketAddress {
+	fn as_ref(&self) -> &LdkSocketAddress {
+		self.deref()
+	}
+}
+
+impl std::fmt::Display for SocketAddress {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		write!(f, "{}", self.inner)
+	}
+}
 
 uniffi::custom_type!(UntrustedString, String, {
 	remote,

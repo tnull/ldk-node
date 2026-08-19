@@ -38,10 +38,9 @@ use crate::logger::{log_debug, log_error, log_info, LdkLogger, Logger};
 use crate::runtime::Runtime;
 use crate::types::{
 	Broadcaster, ChannelManager, DynStore, KeysManager, LiquidityManager,
-	PublicKey as BindingPublicKey, Wallet,
+	PublicKey as BindingPublicKey, SocketAddress as BindingSocketAddress, Wallet,
 };
 use crate::{Config, Error};
-
 const LIQUIDITY_REQUEST_TIMEOUT_SECS: u64 = 5;
 const LSPS_DISCOVERY_WAIT_TIMEOUT_SECS: u64 = 10;
 
@@ -159,10 +158,11 @@ impl Liquidity {
 	/// LSP. Note this supersedes [`Config::trusted_peers_0conf`] for this peer.
 	/// Duplicate `node_id`s are ignored.
 	pub fn add_liquidity_source(
-		&self, node_id: BindingPublicKey, address: SocketAddress, token: Option<String>,
+		&self, node_id: BindingPublicKey, address: BindingSocketAddress, token: Option<String>,
 		trust_peer_0conf: bool,
 	) -> Result<(), Error> {
 		let node_id = *crate::ffi::maybe_deref(&node_id);
+		let address = crate::ffi::maybe_deref(&address).clone();
 		{
 			let mut lsp_nodes = self.liquidity_source.lsp_nodes.write().expect("lock");
 			if lsp_nodes.iter().any(|n| n.node_id == node_id) {
