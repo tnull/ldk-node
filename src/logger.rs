@@ -22,6 +22,9 @@ pub(crate) use lightning::util::logger::{Logger as LdkLogger, Record as LdkRecor
 pub(crate) use lightning::{log_bytes, log_debug, log_error, log_info, log_trace, log_warn};
 use log::{Level as LogFacadeLevel, Record as LogFacadeRecord};
 
+#[cfg(feature = "uniffi")]
+use crate::types::PublicKey as BindingPublicKey;
+
 /// A unit of logging output with metadata to enable filtering `module_path`,
 /// `file`, and `line` to inform on log's source.
 #[cfg(not(feature = "uniffi"))]
@@ -112,7 +115,7 @@ pub struct LogRecord {
 	/// The line containing the message.
 	pub line: u32,
 	/// The node id of the peer pertaining to the logged record.
-	pub peer_id: Option<PublicKey>,
+	pub peer_id: Option<BindingPublicKey>,
 	/// The channel id of the channel pertaining to the logged record.
 	pub channel_id: Option<ChannelId>,
 	/// The payment hash pertaining to the logged record.
@@ -127,7 +130,7 @@ impl<'a> From<LdkRecord<'a>> for LogRecord {
 			args: record.args.to_string(),
 			module_path: record.module_path.to_string(),
 			line: record.line,
-			peer_id: record.peer_id,
+			peer_id: record.peer_id.map(crate::ffi::maybe_wrap),
 			channel_id: record.channel_id,
 			payment_hash: record.payment_hash,
 		}
@@ -188,7 +191,7 @@ impl LogWriter for Writer {
 	fn log(&self, record: LogRecord) {
 		let context = LogContext {
 			channel_id: record.channel_id.as_ref(),
-			peer_id: record.peer_id.as_ref(),
+			peer_id: record.peer_id.as_ref().map(crate::ffi::maybe_deref),
 			payment_hash: record.payment_hash.as_ref(),
 		};
 
@@ -417,7 +420,7 @@ mod tests {
 			args: "Test message".to_string(),
 			module_path: "test_module".to_string(),
 			line: 42,
-			peer_id: Some(peer_id),
+			peer_id: Some(crate::ffi::maybe_wrap(peer_id)),
 			channel_id: Some(channel_id),
 			payment_hash: None,
 		};

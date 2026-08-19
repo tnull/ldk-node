@@ -83,6 +83,8 @@ use crate::probing::{
 };
 use crate::runtime::{Runtime, RuntimeSpawner};
 use crate::tx_broadcaster::TransactionBroadcaster;
+#[cfg(feature = "uniffi")]
+use crate::types::PublicKey as BindingPublicKey;
 use crate::types::{
 	AsyncPersister, ChainMonitor, ChannelManager, DynStore, DynStoreRef, DynStoreWrapper,
 	GossipSync, Graph, HRNResolver, KeysManager, MessageRouter, OnionMessenger, PaymentStore,
@@ -1103,11 +1105,11 @@ impl ArcedNodeBuilder {
 	///
 	/// [bLIP-50 / LSPS0]: https://github.com/lightning/blips/blob/master/blip-0050.md
 	pub fn add_liquidity_source(
-		&self, node_id: PublicKey, address: SocketAddress, token: Option<String>,
+		&self, node_id: BindingPublicKey, address: SocketAddress, token: Option<String>,
 		trust_peer_0conf: bool,
 	) {
 		self.inner.write().expect("lock").add_liquidity_source(
-			node_id,
+			*crate::ffi::maybe_deref(&node_id),
 			address,
 			token,
 			trust_peer_0conf,

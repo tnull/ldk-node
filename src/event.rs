@@ -11,8 +11,10 @@ use std::collections::VecDeque;
 use std::ops::Deref;
 use std::sync::{Arc, Mutex};
 
+#[cfg(feature = "uniffi")]
+use crate::ffi::ReadablePublicKey;
 use bitcoin::blockdata::locktime::absolute::LockTime;
-use bitcoin::secp256k1::PublicKey;
+use bitcoin::secp256k1::PublicKey as Secp256k1PublicKey;
 use bitcoin::{Amount, OutPoint};
 use lightning::blinded_path::message::NextMessageHop;
 use lightning::events::bump_transaction::BumpTransactionEvent;
@@ -33,6 +35,29 @@ use lightning::util::ser::{Readable, ReadableArgs, Writeable, Writer};
 use lightning::{impl_writeable_tlv_based, impl_writeable_tlv_based_enum};
 use lightning_liquidity::lsps2::utils::compute_opening_fee;
 use lightning_types::payment::{PaymentHash, PaymentPreimage};
+
+#[cfg(not(feature = "uniffi"))]
+trait ReadablePublicKey: Sized {
+	fn read<R: lightning::io::Read>(
+		reader: &mut R,
+	) -> Result<Self, lightning::ln::msgs::DecodeError>;
+}
+#[cfg(not(feature = "uniffi"))]
+impl ReadablePublicKey for PublicKey {
+	fn read<R: lightning::io::Read>(
+		reader: &mut R,
+	) -> Result<Self, lightning::ln::msgs::DecodeError> {
+		Readable::read(reader)
+	}
+}
+#[cfg(not(feature = "uniffi"))]
+impl ReadablePublicKey for lightning::util::ser::RequiredWrapper<PublicKey> {
+	fn read<R: lightning::io::Read>(
+		reader: &mut R,
+	) -> Result<Self, lightning::ln::msgs::DecodeError> {
+		<PublicKey as Readable>::read(reader).map(Into::into)
+	}
+}
 
 use crate::config::{may_announce_channel, Config, PEER_RECONNECTION_INTERVAL};
 use crate::connection::ConnectionManager;
@@ -55,7 +80,8 @@ use crate::payment::PaymentMetadata;
 use crate::probing::Prober;
 use crate::runtime::Runtime;
 use crate::types::{
-	CustomTlvRecord, DynStore, KeysManager, OnionMessenger, PaymentStore, Sweeper, Wallet,
+	CustomTlvRecord, DynStore, KeysManager, OnionMessenger, PaymentStore, PublicKey, Sweeper,
+	Wallet,
 };
 use crate::{
 	hex_utils, BumpTransactionEventHandler, ChannelManager, Error, Graph, PeerInfo, PeerStore,
@@ -87,7 +113,7 @@ pub struct HTLCLocator {
 impl_writeable_tlv_based!(HTLCLocator, {
 	(1, channel_id, required),
 	(3, user_channel_id, option),
-	(5, node_id, option),
+	(5, node_id, (option: ReadablePublicKey)),
 	(7, amount_msat, option),
 });
 
@@ -97,7 +123,7 @@ impl From<LdkHtlcLocator> for HTLCLocator {
 			channel_id: value.channel_id,
 			amount_msat: value.amount_msat,
 			user_channel_id: value.user_channel_id.map(|u| UserChannelId(u)),
-			node_id: value.node_id,
+			node_id: value.node_id.map(crate::ffi::maybe_wrap),
 		}
 	}
 }
@@ -329,7 +355,7 @@ impl_writeable_tlv_based_enum!(Event,
 	},
 	(3, ChannelReady) => {
 		(0, channel_id, required),
-		(1, counterparty_node_id, option),
+		(1, counterparty_node_id, (option: ReadablePublicKey)),
 		(2, user_channel_id, required),
 		(3, funding_txo, option),
 	},
@@ -337,12 +363,12 @@ impl_writeable_tlv_based_enum!(Event,
 		(0, channel_id, required),
 		(2, user_channel_id, required),
 		(4, former_temporary_channel_id, required),
-		(6, counterparty_node_id, required),
+		(6, counterparty_node_id, (required: ReadablePublicKey)),
 		(8, funding_txo, required),
 	},
 	(5, ChannelClosed) => {
 		(0, channel_id, required),
-		(1, counterparty_node_id, required),
+		(1, counterparty_node_id, (required: ReadablePublicKey)),
 		(2, user_channel_id, required),
 		(3, reason, upgradable_option),
 	},
@@ -356,9 +382,9 @@ impl_writeable_tlv_based_enum!(Event,
 	(7, PaymentForwarded) => {
 		// Legacy fields: read from old data, never written.
 		(0, legacy_prev_channel_id, (legacy, ChannelId, |_| Ok(()), |_: &Event| None::<Option<ChannelId>>)),
-		(1, legacy_prev_node_id, (legacy, PublicKey, |_| Ok(()), |_: &Event| None::<Option<PublicKey>>)),
+		(1, legacy_prev_node_id, (legacy, Secp256k1PublicKey, |_| Ok(()), |_: &Event| None::<Option<Secp256k1PublicKey>>)),
 		(2, legacy_next_channel_id, (legacy, ChannelId, |_| Ok(()), |_: &Event| None::<Option<ChannelId>>)),
-		(3, legacy_next_node_id, (legacy, PublicKey, |_| Ok(()), |_: &Event| None::<Option<PublicKey>>)),
+		(3, legacy_next_node_id, (legacy, Secp256k1PublicKey, |_| Ok(()), |_: &Event| None::<Option<Secp256k1PublicKey>>)),
 		(4, legacy_prev_user_channel_id, (legacy, u128, |_| Ok(()), |_: &Event| None::<Option<u128>>)),
 		(6, legacy_next_user_channel_id, (legacy, u128, |_| Ok(()), |_: &Event| None::<Option<u128>>)),
 		(8, total_fee_earned_msat, option),
@@ -369,24 +395,24 @@ impl_writeable_tlv_based_enum!(Event,
 			channel_id: legacy_prev_channel_id.ok_or(lightning::ln::msgs::DecodeError::InvalidValue)?,
 			amount_msat: None,
 			user_channel_id: legacy_prev_user_channel_id.map(UserChannelId),
-			node_id: legacy_prev_node_id,
+			node_id: legacy_prev_node_id.map(crate::ffi::maybe_wrap),
 		}])),
 		(17, next_htlcs, (default_value_vec, vec![HTLCLocator {
 			channel_id: legacy_next_channel_id.ok_or(lightning::ln::msgs::DecodeError::InvalidValue)?,
 			amount_msat: None,
 			user_channel_id: legacy_next_user_channel_id.map(UserChannelId),
-			node_id: legacy_next_node_id,
+			node_id: legacy_next_node_id.map(crate::ffi::maybe_wrap),
 		}])),
 	},
 	(8, SpliceNegotiated) => {
 		(1, channel_id, required),
-		(3, counterparty_node_id, required),
+		(3, counterparty_node_id, (required: ReadablePublicKey)),
 		(5, user_channel_id, required),
 		(7, new_funding_txo, required),
 	},
 	(9, SpliceNegotiationFailed) => {
 		(1, channel_id, required),
-		(3, counterparty_node_id, required),
+		(3, counterparty_node_id, (required: ReadablePublicKey)),
 		(5, user_channel_id, required),
 		// TLV 7 (abandoned_funding_txo) may be set for LDK Node v0.7.
 	},
@@ -1585,8 +1611,11 @@ where
 						.try_into()
 						.expect("slice is exactly 16 bytes"),
 				);
-				let mut allow_0conf =
-					self.config.trusted_peers_0conf.contains(&counterparty_node_id);
+				let mut allow_0conf = self
+					.config
+					.trusted_peers_0conf
+					.iter()
+					.any(|node_id| crate::ffi::maybe_deref(node_id) == &counterparty_node_id);
 
 				// If the peer is a configured LSP node, additionally honor its trust_peer_0conf flag.
 				if self.liquidity_source.get_lsp_trust_0conf(&counterparty_node_id) == Some(true) {
@@ -1787,7 +1816,7 @@ where
 					channel_id,
 					user_channel_id: UserChannelId(user_channel_id),
 					former_temporary_channel_id,
-					counterparty_node_id,
+					counterparty_node_id: crate::ffi::maybe_wrap(counterparty_node_id),
 					funding_txo,
 				};
 				match self.event_queue.add_event(event).await {
@@ -1864,7 +1893,7 @@ where
 				let event = Event::ChannelReady {
 					channel_id,
 					user_channel_id: UserChannelId(user_channel_id),
-					counterparty_node_id: Some(counterparty_node_id),
+					counterparty_node_id: Some(crate::ffi::maybe_wrap(counterparty_node_id)),
 					funding_txo,
 				};
 				match self.event_queue.add_event(event).await {
@@ -1924,7 +1953,7 @@ where
 				let event = Event::ChannelClosed {
 					channel_id,
 					user_channel_id: UserChannelId(user_channel_id),
-					counterparty_node_id,
+					counterparty_node_id: crate::ffi::maybe_wrap(counterparty_node_id),
 					reason: Some(reason),
 				};
 
@@ -2021,7 +2050,8 @@ where
 							.config
 							.anchor_channels_config
 							.trusted_peers_no_reserve
-							.contains(counterparty_node_id)
+							.iter()
+							.any(|node_id| crate::ffi::maybe_deref(node_id) == counterparty_node_id)
 						{
 							log_debug!(self.logger,
 								"Ignoring BumpTransactionEvent::ChannelClose for channel {} due to trusted counterparty {}",
@@ -2179,7 +2209,7 @@ where
 				let event = Event::SpliceNegotiated {
 					channel_id,
 					user_channel_id: UserChannelId(user_channel_id),
-					counterparty_node_id,
+					counterparty_node_id: crate::ffi::maybe_wrap(counterparty_node_id),
 					new_funding_txo,
 				};
 
@@ -2207,7 +2237,7 @@ where
 				let event = Event::SpliceNegotiationFailed {
 					channel_id,
 					user_channel_id: UserChannelId(user_channel_id),
-					counterparty_node_id,
+					counterparty_node_id: crate::ffi::maybe_wrap(counterparty_node_id),
 				};
 
 				match self.event_queue.add_event(event).await {
@@ -2329,7 +2359,7 @@ mod tests {
 		ChannelClosed {
 			channel_id: ChannelId,
 			user_channel_id: UserChannelId,
-			counterparty_node_id: Option<PublicKey>,
+			counterparty_node_id: Option<Secp256k1PublicKey>,
 			reason: Option<ClosureReason>,
 		},
 		PaymentForwarded {
@@ -2375,7 +2405,7 @@ mod tests {
 	fn event_queue_reads_legacy_channel_closed_with_counterparty() {
 		let store: Arc<DynStore> = Arc::new(DynStoreWrapper(InMemoryStore::new()));
 		let logger = Arc::new(TestLogger::new());
-		let counterparty_node_id = PublicKey::from_str(
+		let counterparty_node_id = Secp256k1PublicKey::from_str(
 			"0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798",
 		)
 		.unwrap();
@@ -2396,7 +2426,7 @@ mod tests {
 			Some(Event::ChannelClosed {
 				channel_id,
 				user_channel_id,
-				counterparty_node_id,
+				counterparty_node_id: crate::ffi::maybe_wrap(counterparty_node_id),
 				reason: None,
 			})
 		);

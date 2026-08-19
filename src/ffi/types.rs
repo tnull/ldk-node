@@ -20,7 +20,7 @@ use std::time::Duration;
 use bip39::Mnemonic as Bip39Mnemonic;
 use bitcoin::hashes::sha256::Hash as Sha256;
 use bitcoin::hashes::Hash;
-use bitcoin::secp256k1::PublicKey;
+use bitcoin::secp256k1::PublicKey as Secp256k1PublicKey;
 pub use bitcoin::{Address, BlockHash, Network, OutPoint, ScriptBuf, Txid};
 pub use lightning::chain::channelmonitor::BalanceSource;
 pub use lightning::events::{ClosureReason, PaymentFailureReason};
@@ -40,7 +40,7 @@ use lightning::onion_message::dns_resolution::HumanReadableName as LdkHumanReada
 pub use lightning::routing::gossip::{NodeAlias, NodeId, RoutingFees};
 pub use lightning::routing::router::RouteParametersConfig;
 use lightning::util::persist::PageToken as LdkPageToken;
-use lightning::util::ser::{Readable, Writeable, Writer};
+use lightning::util::ser::{Readable, RequiredWrapper, Writeable, Writer};
 use lightning_invoice::{Bolt11Invoice as LdkBolt11Invoice, Bolt11InvoiceDescriptionRef};
 pub use lightning_invoice::{Description, SignedRawBolt11Invoice};
 pub use lightning_liquidity::lsps0::ser::LSPSDateTime;
@@ -158,19 +158,87 @@ pub use crate::logger::{LogLevel, LogRecord, LogWriter};
 pub use crate::probing::ProbingConfig;
 use crate::{hex_utils, SocketAddress, UserChannelId};
 
-uniffi::custom_type!(PublicKey, String, {
-	remote,
-	try_lift: |val| {
-		if let Ok(key) = PublicKey::from_str(&val) {
-			return Ok(key);
-		}
+/// A secp256k1 public key.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Object)]
+#[uniffi::export(Debug, Display, Eq)]
+pub struct PublicKey {
+	pub(crate) inner: Secp256k1PublicKey,
+}
 
-		Err(Error::InvalidPublicKey.into())
-	},
-	lower: |obj| {
-		obj.to_string()
-	},
-});
+#[uniffi::export]
+impl PublicKey {
+	/// Constructs a public key from its serialized representation.
+	#[uniffi::constructor]
+	pub fn from_str(public_key_str: &str) -> Result<Self, Error> {
+		public_key_str.parse()
+	}
+}
+
+impl FromStr for PublicKey {
+	type Err = Error;
+
+	fn from_str(public_key_str: &str) -> Result<Self, Self::Err> {
+		public_key_str
+			.parse::<Secp256k1PublicKey>()
+			.map(|inner| Self { inner })
+			.map_err(|_| Error::InvalidPublicKey)
+	}
+}
+
+impl From<Secp256k1PublicKey> for PublicKey {
+	fn from(inner: Secp256k1PublicKey) -> Self {
+		Self { inner }
+	}
+}
+
+impl Deref for PublicKey {
+	type Target = Secp256k1PublicKey;
+
+	fn deref(&self) -> &Self::Target {
+		&self.inner
+	}
+}
+
+impl AsRef<Secp256k1PublicKey> for PublicKey {
+	fn as_ref(&self) -> &Secp256k1PublicKey {
+		self.deref()
+	}
+}
+
+impl std::fmt::Display for PublicKey {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		write!(f, "{}", self.inner)
+	}
+}
+
+impl Writeable for PublicKey {
+	fn write<W: Writer>(&self, writer: &mut W) -> Result<(), lightning::io::Error> {
+		self.inner.write(writer)
+	}
+}
+
+impl Readable for PublicKey {
+	fn read<R: lightning::io::Read>(reader: &mut R) -> Result<Self, DecodeError> {
+		Secp256k1PublicKey::read(reader).map(Self::from)
+	}
+}
+
+/// Reads a binding public key behind the `Arc` required for UniFFI interfaces.
+pub(crate) trait ReadablePublicKey: Sized {
+	fn read<R: lightning::io::Read>(reader: &mut R) -> Result<Self, DecodeError>;
+}
+
+impl ReadablePublicKey for Arc<PublicKey> {
+	fn read<R: lightning::io::Read>(reader: &mut R) -> Result<Self, DecodeError> {
+		PublicKey::read(reader).map(Arc::new)
+	}
+}
+
+impl ReadablePublicKey for RequiredWrapper<Arc<PublicKey>> {
+	fn read<R: lightning::io::Read>(reader: &mut R) -> Result<Self, DecodeError> {
+		PublicKey::read(reader).map(|public_key| RequiredWrapper(Some(Arc::new(public_key))))
+	}
+}
 
 uniffi::custom_type!(NodeId, String, {
 	remote,
@@ -338,8 +406,8 @@ impl Offer {
 	///
 	/// [`InvoiceRequest`]: lightning::offers::invoice_request::InvoiceRequest
 	/// [`Bolt12Invoice::signing_pubkey`]: lightning::offers::invoice::Bolt12Invoice::signing_pubkey
-	pub fn issuer_signing_pubkey(&self) -> Option<PublicKey> {
-		self.inner.issuer_signing_pubkey()
+	pub fn issuer_signing_pubkey(&self) -> Option<Arc<PublicKey>> {
+		self.inner.issuer_signing_pubkey().map(crate::ffi::maybe_wrap)
 	}
 }
 
@@ -532,8 +600,8 @@ impl Refund {
 	/// Otherwise, a possibly transient pubkey.
 	///
 	/// [`paths`]: lightning::offers::refund::Refund::paths
-	pub fn payer_signing_pubkey(&self) -> PublicKey {
-		self.inner.payer_signing_pubkey()
+	pub fn payer_signing_pubkey(&self) -> Arc<PublicKey> {
+		crate::ffi::maybe_wrap(self.inner.payer_signing_pubkey())
 	}
 
 	/// Payer provided note to include in the invoice.
@@ -625,8 +693,8 @@ impl Bolt12Invoice {
 	/// [`Offer::issuer_signing_pubkey`]: lightning::offers::offer::Offer::issuer_signing_pubkey
 	/// [`Offer::paths`]: lightning::offers::offer::Offer::paths
 	/// [`Refund`]: lightning::offers::refund::Refund
-	pub fn signing_pubkey(&self) -> PublicKey {
-		self.inner.signing_pubkey()
+	pub fn signing_pubkey(&self) -> Arc<PublicKey> {
+		crate::ffi::maybe_wrap(self.inner.signing_pubkey())
 	}
 
 	/// Duration since the Unix epoch when the invoice was created.
@@ -712,8 +780,8 @@ impl Bolt12Invoice {
 	/// refund in case there are no [`message_paths`].
 	///
 	/// [`message_paths`]: lightning::offers::invoice::Bolt12Invoice
-	pub fn payer_signing_pubkey(&self) -> PublicKey {
-		self.inner.payer_signing_pubkey()
+	pub fn payer_signing_pubkey(&self) -> Arc<PublicKey> {
+		crate::ffi::maybe_wrap(self.inner.payer_signing_pubkey())
 	}
 
 	/// The public key used by the recipient to sign invoices.
@@ -723,8 +791,8 @@ impl Bolt12Invoice {
 	///
 	/// [`Offer::issuer_signing_pubkey`]: lightning::offers::offer::Offer::issuer_signing_pubkey
 	/// [`Refund`]: lightning::offers::refund::Refund
-	pub fn issuer_signing_pubkey(&self) -> Option<PublicKey> {
-		self.inner.issuer_signing_pubkey()
+	pub fn issuer_signing_pubkey(&self) -> Option<Arc<PublicKey>> {
+		self.inner.issuer_signing_pubkey().map(crate::ffi::maybe_wrap)
 	}
 
 	/// The chain that must be used when paying the invoice; selected from [`offer_chains`] if the
@@ -932,13 +1000,13 @@ impl PayerProof {
 	}
 
 	/// The public key of the payer that authorized the payment.
-	pub fn payer_signing_pubkey(&self) -> PublicKey {
-		self.inner.payer_signing_pubkey()
+	pub fn payer_signing_pubkey(&self) -> Arc<PublicKey> {
+		crate::ffi::maybe_wrap(self.inner.payer_signing_pubkey())
 	}
 
 	/// The issuer signing public key committed to by the invoice.
-	pub fn issuer_signing_pubkey(&self) -> PublicKey {
-		self.inner.issuer_signing_pubkey()
+	pub fn issuer_signing_pubkey(&self) -> Arc<PublicKey> {
+		crate::ffi::maybe_wrap(self.inner.issuer_signing_pubkey())
 	}
 
 	/// The invoice signature bytes.
@@ -1378,7 +1446,7 @@ impl From<lightning_invoice::Currency> for Currency {
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
 pub struct RouteHintHop {
 	/// The node_id of the non-target end of the route
-	pub src_node_id: PublicKey,
+	pub src_node_id: Arc<PublicKey>,
 	/// The short_channel_id of this channel
 	pub short_channel_id: u64,
 	/// The fees which must be paid to use this channel
@@ -1394,7 +1462,7 @@ pub struct RouteHintHop {
 impl From<lightning::routing::router::RouteHintHop> for RouteHintHop {
 	fn from(hop: lightning::routing::router::RouteHintHop) -> Self {
 		Self {
-			src_node_id: hop.src_node_id,
+			src_node_id: crate::ffi::maybe_wrap(hop.src_node_id),
 			short_channel_id: hop.short_channel_id,
 			cltv_expiry_delta: hop.cltv_expiry_delta,
 			htlc_minimum_msat: hop.htlc_minimum_msat,
@@ -1506,8 +1574,8 @@ impl Bolt11Invoice {
 	}
 
 	/// Recover the payee's public key (only to be used if none was included in the invoice)
-	pub fn recover_payee_pub_key(&self) -> PublicKey {
-		self.inner.recover_payee_pub_key()
+	pub fn recover_payee_pub_key(&self) -> Arc<PublicKey> {
+		crate::ffi::maybe_wrap(self.inner.recover_payee_pub_key())
 	}
 }
 
@@ -2632,7 +2700,7 @@ mod tests {
 
 		let ldk_hop = &ldk_route_hints[0].0[0];
 		let wrapped_hop = &wrapped_route_hints[0][0];
-		assert_eq!(ldk_hop.src_node_id, wrapped_hop.src_node_id);
+		assert_eq!(ldk_hop.src_node_id, **wrapped_hop.src_node_id);
 		assert_eq!(ldk_hop.short_channel_id, wrapped_hop.short_channel_id);
 		assert_eq!(ldk_hop.cltv_expiry_delta, wrapped_hop.cltv_expiry_delta);
 		assert_eq!(ldk_hop.htlc_minimum_msat, wrapped_hop.htlc_minimum_msat);
@@ -2743,7 +2811,7 @@ mod tests {
 
 		match (ldk_offer.issuer_signing_pubkey(), wrapped_offer.issuer_signing_pubkey()) {
 			(Some(ldk_expiry_signing_pubkey), Some(wrapped_issuer_signing_pubkey)) => {
-				assert_eq!(ldk_expiry_signing_pubkey, wrapped_issuer_signing_pubkey);
+				assert_eq!(ldk_expiry_signing_pubkey, **wrapped_issuer_signing_pubkey);
 			},
 			(None, None) => {
 				// Both fields are missing which is expected behaviour when converting
@@ -2825,7 +2893,7 @@ mod tests {
 		}
 
 		assert_eq!(ldk_refund.payer_metadata().to_vec(), wrapped_refund.payer_metadata());
-		assert_eq!(ldk_refund.payer_signing_pubkey(), wrapped_refund.payer_signing_pubkey());
+		assert_eq!(ldk_refund.payer_signing_pubkey(), **wrapped_refund.payer_signing_pubkey());
 
 		if let Ok(network) = Network::try_from(ldk_refund.chain()) {
 			assert_eq!(wrapped_refund.chain(), Some(network));
@@ -2845,7 +2913,7 @@ mod tests {
 		assert_eq!(ldk_invoice.amount_msats(), wrapped_invoice.amount_msats());
 		assert_eq!(ldk_invoice.is_expired(), wrapped_invoice.is_expired());
 
-		assert_eq!(ldk_invoice.signing_pubkey(), wrapped_invoice.signing_pubkey());
+		assert_eq!(ldk_invoice.signing_pubkey(), **wrapped_invoice.signing_pubkey());
 
 		assert_eq!(ldk_invoice.created_at().as_secs(), wrapped_invoice.created_at());
 

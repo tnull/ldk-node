@@ -5,6 +5,9 @@
   mnemonic phrases must be passed through its fallible constructor, which returns
   `NodeError::InvalidMnemonic` for invalid input; generated mnemonics can be converted back to a
   string through their language's standard string conversion.
+- The language bindings now expose `PublicKey` as an object instead of a string alias. Public keys
+  must be passed through its fallible constructor, which returns `NodeError::InvalidPublicKey` for
+  invalid input.
 - `generate_entropy_mnemonic` has been removed. Use `bip39::Mnemonic::generate` in Rust and
   `Mnemonic::generate` in the language bindings instead.
 - Migrating between storage backends does not preserve the relative creation order of

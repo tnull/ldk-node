@@ -23,7 +23,9 @@ use crate::error::Error;
 use crate::logger::{log_error, log_info, LdkLogger, Logger};
 use crate::payment::store::{PaymentDetails, PaymentDirection, PaymentKind, PaymentStatus};
 use crate::runtime::Runtime;
-use crate::types::{ChannelManager, CustomTlvRecord, KeysManager, PaymentStore};
+use crate::types::{
+	ChannelManager, CustomTlvRecord, KeysManager, PaymentStore, PublicKey as BindingPublicKey,
+};
 
 // The default `final_cltv_expiry_delta` we apply when not set.
 const LDK_DEFAULT_FINAL_CLTV_EXPIRY_DELTA: u32 = 144;
@@ -171,34 +173,58 @@ impl SpontaneousPayment {
 	/// If `route_parameters` are provided they will override the default as well as the
 	/// node-wide parameters configured via [`Config::route_parameters`] on a per-field basis.
 	pub fn send(
-		&self, amount_msat: u64, node_id: PublicKey,
+		&self, amount_msat: u64, node_id: BindingPublicKey,
 		route_parameters: Option<RouteParametersConfig>,
 	) -> Result<PaymentId, Error> {
-		self.send_inner(amount_msat, node_id, route_parameters, None, None)
+		self.send_inner(
+			amount_msat,
+			*crate::ffi::maybe_deref(&node_id),
+			route_parameters,
+			None,
+			None,
+		)
 	}
 
 	/// Send a spontaneous payment including a list of custom TLVs.
 	pub fn send_with_custom_tlvs(
-		&self, amount_msat: u64, node_id: PublicKey,
+		&self, amount_msat: u64, node_id: BindingPublicKey,
 		route_parameters: Option<RouteParametersConfig>, custom_tlvs: Vec<CustomTlvRecord>,
 	) -> Result<PaymentId, Error> {
-		self.send_inner(amount_msat, node_id, route_parameters, Some(custom_tlvs), None)
+		self.send_inner(
+			amount_msat,
+			*crate::ffi::maybe_deref(&node_id),
+			route_parameters,
+			Some(custom_tlvs),
+			None,
+		)
 	}
 
 	/// Send a spontaneous payment with custom preimage
 	pub fn send_with_preimage(
-		&self, amount_msat: u64, node_id: PublicKey, preimage: PaymentPreimage,
+		&self, amount_msat: u64, node_id: BindingPublicKey, preimage: PaymentPreimage,
 		route_parameters: Option<RouteParametersConfig>,
 	) -> Result<PaymentId, Error> {
-		self.send_inner(amount_msat, node_id, route_parameters, None, Some(preimage))
+		self.send_inner(
+			amount_msat,
+			*crate::ffi::maybe_deref(&node_id),
+			route_parameters,
+			None,
+			Some(preimage),
+		)
 	}
 
 	/// Send a spontaneous payment with custom preimage including a list of custom TLVs.
 	pub fn send_with_preimage_and_custom_tlvs(
-		&self, amount_msat: u64, node_id: PublicKey, custom_tlvs: Vec<CustomTlvRecord>,
+		&self, amount_msat: u64, node_id: BindingPublicKey, custom_tlvs: Vec<CustomTlvRecord>,
 		preimage: PaymentPreimage, route_parameters: Option<RouteParametersConfig>,
 	) -> Result<PaymentId, Error> {
-		self.send_inner(amount_msat, node_id, route_parameters, Some(custom_tlvs), Some(preimage))
+		self.send_inner(
+			amount_msat,
+			*crate::ffi::maybe_deref(&node_id),
+			route_parameters,
+			Some(custom_tlvs),
+			Some(preimage),
+		)
 	}
 
 	/// Sends payment probes over all paths of a route that would be used to pay the given
@@ -207,12 +233,13 @@ impl SpontaneousPayment {
 	/// See [`Bolt11Payment::send_probes`] for more information.
 	///
 	/// [`Bolt11Payment::send_probes`]: crate::payment::Bolt11Payment
-	pub fn send_probes(&self, amount_msat: u64, node_id: PublicKey) -> Result<(), Error> {
+	pub fn send_probes(&self, amount_msat: u64, node_id: BindingPublicKey) -> Result<(), Error> {
 		if !*self.is_running.read().expect("lock") {
 			return Err(Error::NotRunning);
 		}
 
 		let liquidity_limit_multiplier = Some(self.config.probing_liquidity_limit_multiplier);
+		let node_id = *crate::ffi::maybe_deref(&node_id);
 
 		self.channel_manager
 			.send_spontaneous_preflight_probes(

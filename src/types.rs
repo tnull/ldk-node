@@ -10,7 +10,10 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 
-use bitcoin::secp256k1::PublicKey;
+#[cfg(not(feature = "uniffi"))]
+pub(crate) use bitcoin::secp256k1::PublicKey;
+#[cfg(feature = "uniffi")]
+pub(crate) type PublicKey = Arc<crate::ffi::PublicKey>;
 use bitcoin::{OutPoint, ScriptBuf};
 use bitcoin_payment_instructions::amount::Amount as BPIAmount;
 use bitcoin_payment_instructions::dns_resolver::DNSHrnResolver;
@@ -47,7 +50,7 @@ use crate::chain::ChainSource;
 use crate::config::{AnchorChannelsConfig, ChannelConfig};
 use crate::data_store::{DataStore, KeepAllEntries, KeepLeastRecentlyUsed};
 use crate::fee_estimator::OnchainFeeEstimator;
-use crate::ffi::maybe_wrap;
+use crate::ffi::{maybe_deref, maybe_wrap};
 use crate::logger::Logger;
 use crate::message_handler::NodeCustomMessageHandler;
 use crate::payment::{PaymentDetails, PendingPaymentDetails};
@@ -661,7 +664,8 @@ impl ChannelDetails {
 			if crate::requires_anchor_channel_type(channel_type) {
 				if anchor_channels_config
 					.trusted_peers_no_reserve
-					.contains(&value.counterparty.node_id)
+					.iter()
+					.any(|node_id| maybe_deref(node_id) == &value.counterparty.node_id)
 				{
 					ReserveType::TrustedPeersNoReserve
 				} else {
@@ -675,7 +679,7 @@ impl ChannelDetails {
 		ChannelDetails {
 			channel_id: value.channel_id,
 			counterparty: ChannelCounterparty {
-				node_id: value.counterparty.node_id,
+				node_id: maybe_wrap(value.counterparty.node_id),
 				features: maybe_wrap(value.counterparty.features),
 				unspendable_punishment_reserve: value.counterparty.unspendable_punishment_reserve,
 				forwarding_info: value.counterparty.forwarding_info,

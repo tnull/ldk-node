@@ -5,13 +5,15 @@
 // http://opensource.org/licenses/MIT>, at your option. You may not use this file except in
 // accordance with one or both of these licenses.
 
-use bitcoin::secp256k1::PublicKey;
+use bitcoin::secp256k1::PublicKey as Secp256k1PublicKey;
 use bitcoin::{Amount, BlockHash, Txid};
 use lightning::chain::channelmonitor::{Balance as LdkBalance, BalanceSource};
 use lightning::ln::types::ChannelId;
 use lightning::sign::SpendableOutputDescriptor;
 use lightning::util::sweep::{OutputSpendStatus, TrackedSpendableOutput};
 use lightning_types::payment::{PaymentHash, PaymentPreimage};
+
+use crate::types::PublicKey;
 
 /// Details of the known available balances returned by [`Node::list_balances`].
 ///
@@ -220,8 +222,9 @@ pub enum LightningBalance {
 
 impl LightningBalance {
 	pub(crate) fn from_ldk_balance(
-		channel_id: ChannelId, counterparty_node_id: PublicKey, balance: LdkBalance,
+		channel_id: ChannelId, counterparty_node_id: Secp256k1PublicKey, balance: LdkBalance,
 	) -> Self {
+		let counterparty_node_id = crate::ffi::maybe_wrap(counterparty_node_id);
 		match balance {
 			LdkBalance::ClaimableOnChannelClose {
 				balance_candidates,

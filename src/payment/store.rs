@@ -7,7 +7,9 @@
 
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use bitcoin::secp256k1::PublicKey;
+#[cfg(feature = "uniffi")]
+use crate::ffi::ReadablePublicKey;
+use bitcoin::secp256k1::PublicKey as Secp256k1PublicKey;
 use bitcoin::{BlockHash, Txid};
 use lightning::chain::chaininterface::TransactionType as LdkTransactionType;
 use lightning::ln::channelmanager::PaymentId;
@@ -22,8 +24,26 @@ use lightning::{
 use lightning_types::payment::{PaymentHash, PaymentPreimage, PaymentSecret};
 use lightning_types::string::UntrustedString;
 
+#[cfg(not(feature = "uniffi"))]
+trait ReadablePublicKey: Sized {
+	fn read<R: lightning::io::Read>(reader: &mut R) -> Result<Self, DecodeError>;
+}
+#[cfg(not(feature = "uniffi"))]
+impl ReadablePublicKey for PublicKey {
+	fn read<R: lightning::io::Read>(reader: &mut R) -> Result<Self, DecodeError> {
+		Readable::read(reader)
+	}
+}
+#[cfg(not(feature = "uniffi"))]
+impl ReadablePublicKey for lightning::util::ser::RequiredWrapper<PublicKey> {
+	fn read<R: lightning::io::Read>(reader: &mut R) -> Result<Self, DecodeError> {
+		<PublicKey as Readable>::read(reader).map(Into::into)
+	}
+}
+
 use crate::data_store::{StorableObject, StorableObjectId, StorableObjectUpdate};
 use crate::hex_utils;
+use crate::types::PublicKey;
 
 /// An opaque token used to continue a paginated listing.
 ///
@@ -408,7 +428,7 @@ pub struct Channel {
 }
 
 impl_writeable_tlv_based!(Channel, {
-	(0, counterparty_node_id, required),
+	(0, counterparty_node_id, (required: ReadablePublicKey)),
 	(2, channel_id, required),
 });
 
@@ -472,19 +492,19 @@ impl_writeable_tlv_based_enum!(TransactionType,
 		(0, channels, optional_vec),
 	},
 	(2, CooperativeClose) => {
-		(0, counterparty_node_id, required),
+		(0, counterparty_node_id, (required: ReadablePublicKey)),
 		(2, channel_id, required),
 	},
 	(4, UnilateralClose) => {
-		(0, counterparty_node_id, required),
+		(0, counterparty_node_id, (required: ReadablePublicKey)),
 		(2, channel_id, required),
 	},
 	(6, AnchorBump) => {
-		(0, counterparty_node_id, required),
+		(0, counterparty_node_id, (required: ReadablePublicKey)),
 		(2, channel_id, required),
 	},
 	(8, Claim) => {
-		(0, counterparty_node_id, required),
+		(0, counterparty_node_id, (required: ReadablePublicKey)),
 		(2, channel_id, required),
 	},
 	(10, Sweep) => {
@@ -497,11 +517,11 @@ impl_writeable_tlv_based_enum!(TransactionType,
 
 impl From<LdkTransactionType> for TransactionType {
 	fn from(tx_type: LdkTransactionType) -> Self {
-		let to_channels = |channels: Vec<(PublicKey, ChannelId)>| -> Vec<Channel> {
+		let to_channels = |channels: Vec<(Secp256k1PublicKey, ChannelId)>| -> Vec<Channel> {
 			channels
 				.into_iter()
 				.map(|(counterparty_node_id, channel_id)| Channel {
-					counterparty_node_id,
+					counterparty_node_id: crate::ffi::maybe_wrap(counterparty_node_id),
 					channel_id,
 				})
 				.collect()
@@ -511,16 +531,28 @@ impl From<LdkTransactionType> for TransactionType {
 				TransactionType::Funding { channels: to_channels(channels) }
 			},
 			LdkTransactionType::CooperativeClose { counterparty_node_id, channel_id } => {
-				TransactionType::CooperativeClose { counterparty_node_id, channel_id }
+				TransactionType::CooperativeClose {
+					counterparty_node_id: crate::ffi::maybe_wrap(counterparty_node_id),
+					channel_id,
+				}
 			},
 			LdkTransactionType::UnilateralClose { counterparty_node_id, channel_id } => {
-				TransactionType::UnilateralClose { counterparty_node_id, channel_id }
+				TransactionType::UnilateralClose {
+					counterparty_node_id: crate::ffi::maybe_wrap(counterparty_node_id),
+					channel_id,
+				}
 			},
 			LdkTransactionType::AnchorBump { counterparty_node_id, channel_id } => {
-				TransactionType::AnchorBump { counterparty_node_id, channel_id }
+				TransactionType::AnchorBump {
+					counterparty_node_id: crate::ffi::maybe_wrap(counterparty_node_id),
+					channel_id,
+				}
 			},
 			LdkTransactionType::Claim { counterparty_node_id, channel_id } => {
-				TransactionType::Claim { counterparty_node_id, channel_id }
+				TransactionType::Claim {
+					counterparty_node_id: crate::ffi::maybe_wrap(counterparty_node_id),
+					channel_id,
+				}
 			},
 			LdkTransactionType::Sweep { channels } => {
 				TransactionType::Sweep { channels: to_channels(channels) }
@@ -535,7 +567,9 @@ impl From<LdkTransactionType> for TransactionType {
 							.channels
 							.iter()
 							.map(|cf| Channel {
-								counterparty_node_id: cf.counterparty_node_id,
+								counterparty_node_id: crate::ffi::maybe_wrap(
+									cf.counterparty_node_id,
+								),
 								channel_id: cf.channel_id,
 							})
 							.collect()
@@ -854,6 +888,14 @@ mod tests {
 
 	use super::*;
 
+	fn public_key() -> PublicKey {
+		crate::ffi::maybe_wrap(
+			"0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798"
+				.parse::<Secp256k1PublicKey>()
+				.unwrap(),
+		)
+	}
+
 	/// We refactored `PaymentDetails` to hold a payment id and moved some required fields into
 	/// `PaymentKind`. Here, we keep the old layout available in order test de/ser compatibility.
 	#[derive(Clone, Debug, PartialEq, Eq)]
@@ -972,8 +1014,6 @@ mod tests {
 
 	#[test]
 	fn onchain_tx_type_deser_compat() {
-		use std::str::FromStr;
-
 		use bitcoin::hashes::Hash;
 
 		let txid = Txid::from_byte_array([7u8; 32]);
@@ -1000,10 +1040,7 @@ mod tests {
 			status,
 			tx_type: Some(TransactionType::InteractiveFunding {
 				channels: vec![Channel {
-					counterparty_node_id: PublicKey::from_str(
-						"0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798",
-					)
-					.unwrap(),
+					counterparty_node_id: public_key(),
 					channel_id: ChannelId([3u8; 32]),
 				}],
 			}),
@@ -1013,16 +1050,11 @@ mod tests {
 
 	#[test]
 	fn known_onchain_tx_type_survives_unknown_update() {
-		use std::str::FromStr;
-
 		use bitcoin::hashes::Hash;
 
 		let txid = Txid::from_byte_array([8u8; 32]);
 		let payment_id = PaymentId(txid.to_byte_array());
-		let pubkey = PublicKey::from_str(
-			"0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798",
-		)
-		.unwrap();
+		let pubkey = public_key();
 		let tx_type = TransactionType::CooperativeClose {
 			counterparty_node_id: pubkey,
 			channel_id: ChannelId([4u8; 32]),
@@ -1068,38 +1100,48 @@ mod tests {
 
 	#[test]
 	fn transaction_type_from_ldk_variants() {
-		use std::str::FromStr;
-
-		let pubkey = PublicKey::from_str(
-			"0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798",
-		)
-		.unwrap();
+		let ldk_pubkey = "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798"
+			.parse::<Secp256k1PublicKey>()
+			.unwrap();
+		let pubkey: PublicKey = crate::ffi::maybe_wrap(ldk_pubkey);
 		let channel_id = ChannelId([5u8; 32]);
-		let channel = Channel { counterparty_node_id: pubkey, channel_id };
+		let channel = Channel { counterparty_node_id: pubkey.clone(), channel_id };
 
 		let variants = vec![
 			(
-				LdkTransactionType::Funding { channels: vec![(pubkey, channel_id)] },
+				LdkTransactionType::Funding { channels: vec![(ldk_pubkey, channel_id)] },
 				TransactionType::Funding { channels: vec![channel.clone()] },
 			),
 			(
-				LdkTransactionType::CooperativeClose { counterparty_node_id: pubkey, channel_id },
-				TransactionType::CooperativeClose { counterparty_node_id: pubkey, channel_id },
+				LdkTransactionType::CooperativeClose {
+					counterparty_node_id: ldk_pubkey,
+					channel_id,
+				},
+				TransactionType::CooperativeClose {
+					counterparty_node_id: pubkey.clone(),
+					channel_id,
+				},
 			),
 			(
-				LdkTransactionType::UnilateralClose { counterparty_node_id: pubkey, channel_id },
-				TransactionType::UnilateralClose { counterparty_node_id: pubkey, channel_id },
+				LdkTransactionType::UnilateralClose {
+					counterparty_node_id: ldk_pubkey,
+					channel_id,
+				},
+				TransactionType::UnilateralClose {
+					counterparty_node_id: pubkey.clone(),
+					channel_id,
+				},
 			),
 			(
-				LdkTransactionType::AnchorBump { counterparty_node_id: pubkey, channel_id },
-				TransactionType::AnchorBump { counterparty_node_id: pubkey, channel_id },
+				LdkTransactionType::AnchorBump { counterparty_node_id: ldk_pubkey, channel_id },
+				TransactionType::AnchorBump { counterparty_node_id: pubkey.clone(), channel_id },
 			),
 			(
-				LdkTransactionType::Claim { counterparty_node_id: pubkey, channel_id },
-				TransactionType::Claim { counterparty_node_id: pubkey, channel_id },
+				LdkTransactionType::Claim { counterparty_node_id: ldk_pubkey, channel_id },
+				TransactionType::Claim { counterparty_node_id: pubkey.clone(), channel_id },
 			),
 			(
-				LdkTransactionType::Sweep { channels: vec![(pubkey, channel_id)] },
+				LdkTransactionType::Sweep { channels: vec![(ldk_pubkey, channel_id)] },
 				TransactionType::Sweep { channels: vec![channel] },
 			),
 		];
@@ -1111,8 +1153,6 @@ mod tests {
 
 	#[test]
 	fn funding_reclassification_does_not_downgrade_an_advanced_record() {
-		use std::str::FromStr;
-
 		use bitcoin::hashes::Hash;
 
 		// A splice funding payment wallet sync has already advanced to Succeeded/Confirmed.
@@ -1120,10 +1160,7 @@ mod tests {
 		let id = PaymentId(txid.to_byte_array());
 		let tx_type = Some(TransactionType::InteractiveFunding {
 			channels: vec![Channel {
-				counterparty_node_id: PublicKey::from_str(
-					"0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798",
-				)
-				.unwrap(),
+				counterparty_node_id: public_key(),
 				channel_id: ChannelId([3u8; 32]),
 			}],
 		});
@@ -1200,8 +1237,6 @@ mod tests {
 
 	#[test]
 	fn funding_reclassification_keeps_confirmed_candidate_figures() {
-		use std::str::FromStr;
-
 		use bitcoin::hashes::Hash;
 
 		// A funding payment whose first candidate wallet sync has already seen confirm — e.g. the
@@ -1230,10 +1265,7 @@ mod tests {
 		let late_txid = Txid::from_byte_array([9u8; 32]);
 		let tx_type = Some(TransactionType::InteractiveFunding {
 			channels: vec![Channel {
-				counterparty_node_id: PublicKey::from_str(
-					"0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798",
-				)
-				.unwrap(),
+				counterparty_node_id: public_key(),
 				channel_id: ChannelId([3u8; 32]),
 			}],
 		});
@@ -1286,8 +1318,6 @@ mod tests {
 
 	#[test]
 	fn funding_reclassification_merges_figures_for_the_confirmed_candidate() {
-		use std::str::FromStr;
-
 		use bitcoin::hashes::Hash;
 
 		// Wallet sync confirmed the transaction before classification ran, so the record carries
@@ -1317,10 +1347,7 @@ mod tests {
 		// different (losing) candidate leaves a confirmed record's figures in place.
 		let tx_type = Some(TransactionType::InteractiveFunding {
 			channels: vec![Channel {
-				counterparty_node_id: PublicKey::from_str(
-					"0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798",
-				)
-				.unwrap(),
+				counterparty_node_id: public_key(),
 				channel_id: ChannelId([3u8; 32]),
 			}],
 		});
@@ -1355,7 +1382,6 @@ mod tests {
 
 	#[tokio::test]
 	async fn funding_classification_merge_preserves_advanced_record() {
-		use std::str::FromStr;
 		use std::sync::Arc;
 
 		use bitcoin::hashes::Hash;
@@ -1369,10 +1395,7 @@ mod tests {
 		let id = PaymentId(txid.to_byte_array());
 		let tx_type = Some(TransactionType::InteractiveFunding {
 			channels: vec![Channel {
-				counterparty_node_id: PublicKey::from_str(
-					"0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798",
-				)
-				.unwrap(),
+				counterparty_node_id: public_key(),
 				channel_id: ChannelId([3u8; 32]),
 			}],
 		});

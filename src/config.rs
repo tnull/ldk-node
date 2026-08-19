@@ -12,7 +12,6 @@ use std::num::NonZeroUsize;
 use std::str::FromStr;
 use std::time::Duration;
 
-use bitcoin::secp256k1::PublicKey;
 use bitcoin::Network;
 use lightning::ln::msgs::SocketAddress;
 use lightning::routing::gossip::NodeAlias;
@@ -22,6 +21,7 @@ use lightning::util::config::{
 };
 
 use crate::logger::LogLevel;
+use crate::types::PublicKey;
 
 // Config defaults
 const DEFAULT_NETWORK: Network = Network::Bitcoin;

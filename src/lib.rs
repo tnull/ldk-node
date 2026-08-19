@@ -119,7 +119,7 @@ use std::{any::Any, sync::Weak};
 pub use balance::{BalanceDetails, LightningBalance, PendingSweepBalance};
 pub use bip39;
 pub use bitcoin;
-use bitcoin::secp256k1::PublicKey;
+use bitcoin::secp256k1::PublicKey as Secp256k1PublicKey;
 #[cfg(feature = "uniffi")]
 pub use bitcoin::FeeRate;
 use bitcoin::{Address, Amount, BlockHash, Network};
@@ -184,8 +184,8 @@ use runtime::Runtime;
 pub use tokio;
 use types::{
 	Broadcaster, BumpTransactionEventHandler, ChainMonitor, ChannelManager, DynStore, Graph,
-	HRNResolver, KeysManager, OnionMessenger, PaymentStore, PeerManager, Router, Scorer, Sweeper,
-	Wallet,
+	HRNResolver, KeysManager, OnionMessenger, PaymentStore, PeerManager,
+	PublicKey as BindingPublicKey, Router, Scorer, Sweeper, Wallet,
 };
 pub use types::{
 	ChannelCounterparty, ChannelDetails, CustomTlvRecord, PeerDetails, ReserveType, UserChannelId,
@@ -1001,8 +1001,8 @@ impl Node {
 	}
 
 	/// Returns our own node id
-	pub fn node_id(&self) -> PublicKey {
-		self.channel_manager.get_our_node_id()
+	pub fn node_id(&self) -> BindingPublicKey {
+		maybe_wrap(self.channel_manager.get_our_node_id())
 	}
 
 	/// Returns our own listening addresses.
@@ -1251,12 +1251,13 @@ impl Node {
 	///
 	/// If `persist` is set to `true`, we'll remember the peer and reconnect to it on restart.
 	pub fn connect(
-		&self, node_id: PublicKey, address: SocketAddress, persist: bool,
+		&self, node_id: BindingPublicKey, address: SocketAddress, persist: bool,
 	) -> Result<(), Error> {
 		if !*self.is_running.read().expect("lock") {
 			return Err(Error::NotRunning);
 		}
 
+		let node_id = *maybe_deref(&node_id);
 		let peer_info = PeerInfo { node_id, address };
 
 		let con_node_id = peer_info.node_id;
@@ -1282,11 +1283,12 @@ impl Node {
 	///
 	/// Will also remove the peer from the peer store, i.e., after this has been called we won't
 	/// try to reconnect on restart.
-	pub fn disconnect(&self, counterparty_node_id: PublicKey) -> Result<(), Error> {
+	pub fn disconnect(&self, counterparty_node_id: BindingPublicKey) -> Result<(), Error> {
 		if !*self.is_running.read().expect("lock") {
 			return Err(Error::NotRunning);
 		}
 
+		let counterparty_node_id = *maybe_deref(&counterparty_node_id);
 		log_info!(self.logger, "Disconnecting peer {}..", counterparty_node_id);
 
 		match self.runtime.block_on(self.peer_store.remove_peer(&counterparty_node_id)) {
@@ -1301,9 +1303,10 @@ impl Node {
 	}
 
 	fn open_channel_inner(
-		&self, node_id: PublicKey, address: SocketAddress, channel_amount_sats: FundingAmount,
-		push_to_counterparty_msat: Option<u64>, channel_config: Option<ChannelConfig>,
-		announce_for_forwarding: bool, disable_counterparty_reserve: bool,
+		&self, node_id: Secp256k1PublicKey, address: SocketAddress,
+		channel_amount_sats: FundingAmount, push_to_counterparty_msat: Option<u64>,
+		channel_config: Option<ChannelConfig>, announce_for_forwarding: bool,
+		disable_counterparty_reserve: bool,
 	) -> Result<UserChannelId, Error> {
 		if !*self.is_running.read().expect("lock") {
 			return Err(Error::NotRunning);
@@ -1421,7 +1424,9 @@ impl Node {
 		}
 	}
 
-	fn new_channel_anchor_reserve_sats(&self, peer_node_id: &PublicKey) -> Result<u64, Error> {
+	fn new_channel_anchor_reserve_sats(
+		&self, peer_node_id: &Secp256k1PublicKey,
+	) -> Result<u64, Error> {
 		let init_features = self
 			.peer_manager
 			.peer_by_node_id(peer_node_id)
@@ -1432,7 +1437,7 @@ impl Node {
 	}
 
 	fn check_sufficient_onchain_funds(
-		&self, amount_sats: u64, peer_node_id: &PublicKey, for_new_channel: bool,
+		&self, amount_sats: u64, peer_node_id: &Secp256k1PublicKey, for_new_channel: bool,
 	) -> Result<(), Error> {
 		let action_str = if for_new_channel { "create channel" } else { "splice-in" };
 		let cur_anchor_reserve_sats =
@@ -1485,11 +1490,11 @@ impl Node {
 	///
 	/// [`AnchorChannelsConfig::per_channel_reserve_sats`]: crate::config::AnchorChannelsConfig::per_channel_reserve_sats
 	pub fn open_channel(
-		&self, node_id: PublicKey, address: SocketAddress, channel_amount_sats: u64,
+		&self, node_id: BindingPublicKey, address: SocketAddress, channel_amount_sats: u64,
 		push_to_counterparty_msat: Option<u64>, channel_config: Option<ChannelConfig>,
 	) -> Result<UserChannelId, Error> {
 		self.open_channel_inner(
-			node_id,
+			*maybe_deref(&node_id),
 			address,
 			FundingAmount::Exact { amount_sats: channel_amount_sats },
 			push_to_counterparty_msat,
@@ -1521,7 +1526,7 @@ impl Node {
 	///
 	/// [`AnchorChannelsConfig::per_channel_reserve_sats`]: crate::config::AnchorChannelsConfig::per_channel_reserve_sats
 	pub fn open_announced_channel(
-		&self, node_id: PublicKey, address: SocketAddress, channel_amount_sats: u64,
+		&self, node_id: BindingPublicKey, address: SocketAddress, channel_amount_sats: u64,
 		push_to_counterparty_msat: Option<u64>, channel_config: Option<ChannelConfig>,
 	) -> Result<UserChannelId, Error> {
 		if let Err(err) = may_announce_channel(&self.config) {
@@ -1530,7 +1535,7 @@ impl Node {
 		}
 
 		self.open_channel_inner(
-			node_id,
+			*maybe_deref(&node_id),
 			address,
 			FundingAmount::Exact { amount_sats: channel_amount_sats },
 			push_to_counterparty_msat,
@@ -1555,11 +1560,11 @@ impl Node {
 	///
 	/// [`AnchorChannelsConfig::per_channel_reserve_sats`]: crate::config::AnchorChannelsConfig::per_channel_reserve_sats
 	pub fn open_channel_with_all(
-		&self, node_id: PublicKey, address: SocketAddress, push_to_counterparty_msat: Option<u64>,
-		channel_config: Option<ChannelConfig>,
+		&self, node_id: BindingPublicKey, address: SocketAddress,
+		push_to_counterparty_msat: Option<u64>, channel_config: Option<ChannelConfig>,
 	) -> Result<UserChannelId, Error> {
 		self.open_channel_inner(
-			node_id,
+			*maybe_deref(&node_id),
 			address,
 			FundingAmount::Max,
 			push_to_counterparty_msat,
@@ -1588,8 +1593,8 @@ impl Node {
 	///
 	/// [`AnchorChannelsConfig::per_channel_reserve_sats`]: crate::config::AnchorChannelsConfig::per_channel_reserve_sats
 	pub fn open_announced_channel_with_all(
-		&self, node_id: PublicKey, address: SocketAddress, push_to_counterparty_msat: Option<u64>,
-		channel_config: Option<ChannelConfig>,
+		&self, node_id: BindingPublicKey, address: SocketAddress,
+		push_to_counterparty_msat: Option<u64>, channel_config: Option<ChannelConfig>,
 	) -> Result<UserChannelId, Error> {
 		if let Err(err) = may_announce_channel(&self.config) {
 			log_error!(self.logger, "Failed to open announced channel as the node hasn't been sufficiently configured to act as a forwarding node: {err}");
@@ -1597,7 +1602,7 @@ impl Node {
 		}
 
 		self.open_channel_inner(
-			node_id,
+			*maybe_deref(&node_id),
 			address,
 			FundingAmount::Max,
 			push_to_counterparty_msat,
@@ -1627,11 +1632,11 @@ impl Node {
 	///
 	/// [`AnchorChannelsConfig::per_channel_reserve_sats`]: crate::config::AnchorChannelsConfig::per_channel_reserve_sats
 	pub fn open_0reserve_channel(
-		&self, node_id: PublicKey, address: SocketAddress, channel_amount_sats: u64,
+		&self, node_id: BindingPublicKey, address: SocketAddress, channel_amount_sats: u64,
 		push_to_counterparty_msat: Option<u64>, channel_config: Option<ChannelConfig>,
 	) -> Result<UserChannelId, Error> {
 		self.open_channel_inner(
-			node_id,
+			*maybe_deref(&node_id),
 			address,
 			FundingAmount::Exact { amount_sats: channel_amount_sats },
 			push_to_counterparty_msat,
@@ -1656,11 +1661,11 @@ impl Node {
 	///
 	/// Returns a [`UserChannelId`] allowing to locally keep track of the channel.
 	pub fn open_0reserve_channel_with_all(
-		&self, node_id: PublicKey, address: SocketAddress, push_to_counterparty_msat: Option<u64>,
-		channel_config: Option<ChannelConfig>,
+		&self, node_id: BindingPublicKey, address: SocketAddress,
+		push_to_counterparty_msat: Option<u64>, channel_config: Option<ChannelConfig>,
 	) -> Result<UserChannelId, Error> {
 		self.open_channel_inner(
-			node_id,
+			*maybe_deref(&node_id),
 			address,
 			FundingAmount::Max,
 			push_to_counterparty_msat,
@@ -1671,7 +1676,7 @@ impl Node {
 	}
 
 	fn splice_in_inner(
-		&self, user_channel_id: &UserChannelId, counterparty_node_id: PublicKey,
+		&self, user_channel_id: &UserChannelId, counterparty_node_id: Secp256k1PublicKey,
 		splice_amount_sats: FundingAmount,
 	) -> Result<(), Error> {
 		let open_channels =
@@ -1811,12 +1816,12 @@ impl Node {
 	/// This API is experimental. Currently, a splice-in will be marked as an outbound payment, but
 	/// this classification may change in the future.
 	pub fn splice_in(
-		&self, user_channel_id: &UserChannelId, counterparty_node_id: PublicKey,
+		&self, user_channel_id: &UserChannelId, counterparty_node_id: BindingPublicKey,
 		splice_amount_sats: u64,
 	) -> Result<(), Error> {
 		self.splice_in_inner(
 			user_channel_id,
-			counterparty_node_id,
+			*maybe_deref(&counterparty_node_id),
 			FundingAmount::Exact { amount_sats: splice_amount_sats },
 		)
 	}
@@ -1835,9 +1840,13 @@ impl Node {
 	/// This API is experimental. Currently, a splice-in will be marked as an outbound payment, but
 	/// this classification may change in the future.
 	pub fn splice_in_with_all(
-		&self, user_channel_id: &UserChannelId, counterparty_node_id: PublicKey,
+		&self, user_channel_id: &UserChannelId, counterparty_node_id: BindingPublicKey,
 	) -> Result<(), Error> {
-		self.splice_in_inner(user_channel_id, counterparty_node_id, FundingAmount::Max)
+		self.splice_in_inner(
+			user_channel_id,
+			*maybe_deref(&counterparty_node_id),
+			FundingAmount::Max,
+		)
 	}
 
 	/// Remove funds from an existing channel, sending them to an on-chain address.
@@ -1852,9 +1861,10 @@ impl Node {
 	/// paid to an address associated with the on-chain wallet, but this classification may change
 	/// in the future.
 	pub fn splice_out(
-		&self, user_channel_id: &UserChannelId, counterparty_node_id: PublicKey, address: &Address,
-		splice_amount_sats: u64,
+		&self, user_channel_id: &UserChannelId, counterparty_node_id: BindingPublicKey,
+		address: &Address, splice_amount_sats: u64,
 	) -> Result<(), Error> {
+		let counterparty_node_id = *maybe_deref(&counterparty_node_id);
 		let open_channels =
 			self.channel_manager.list_channels_with_counterparty(&counterparty_node_id);
 		if let Some(channel_details) =
@@ -1934,8 +1944,9 @@ impl Node {
 	/// (RBF). The splice's amount and destination are preserved; only the fee rate is raised.
 	/// Errors if the channel has no pending splice to bump.
 	pub fn bump_channel_funding_fee(
-		&self, user_channel_id: &UserChannelId, counterparty_node_id: PublicKey,
+		&self, user_channel_id: &UserChannelId, counterparty_node_id: BindingPublicKey,
 	) -> Result<(), Error> {
+		let counterparty_node_id = *maybe_deref(&counterparty_node_id);
 		let open_channels =
 			self.channel_manager.list_channels_with_counterparty(&counterparty_node_id);
 		if let Some(channel_details) =
@@ -2049,9 +2060,14 @@ impl Node {
 	/// Will attempt to close a channel coopertively. If this fails, users might need to resort to
 	/// [`Node::force_close_channel`].
 	pub fn close_channel(
-		&self, user_channel_id: &UserChannelId, counterparty_node_id: PublicKey,
+		&self, user_channel_id: &UserChannelId, counterparty_node_id: BindingPublicKey,
 	) -> Result<(), Error> {
-		self.close_channel_internal(user_channel_id, counterparty_node_id, false, None)
+		self.close_channel_internal(
+			user_channel_id,
+			*maybe_deref(&counterparty_node_id),
+			false,
+			None,
+		)
 	}
 
 	/// Force-close a previously opened channel.
@@ -2068,15 +2084,20 @@ impl Node {
 	///
 	/// [`AnchorChannelsConfig::trusted_peers_no_reserve`]: crate::config::AnchorChannelsConfig::trusted_peers_no_reserve
 	pub fn force_close_channel(
-		&self, user_channel_id: &UserChannelId, counterparty_node_id: PublicKey,
+		&self, user_channel_id: &UserChannelId, counterparty_node_id: BindingPublicKey,
 		reason: Option<String>,
 	) -> Result<(), Error> {
-		self.close_channel_internal(user_channel_id, counterparty_node_id, true, reason)
+		self.close_channel_internal(
+			user_channel_id,
+			*maybe_deref(&counterparty_node_id),
+			true,
+			reason,
+		)
 	}
 
 	fn close_channel_internal(
-		&self, user_channel_id: &UserChannelId, counterparty_node_id: PublicKey, force: bool,
-		force_close_reason: Option<String>,
+		&self, user_channel_id: &UserChannelId, counterparty_node_id: Secp256k1PublicKey,
+		force: bool, force_close_reason: Option<String>,
 	) -> Result<(), Error> {
 		debug_assert!(
 			force_close_reason.is_none() || force,
@@ -2119,9 +2140,10 @@ impl Node {
 
 	/// Update the config for a previously opened channel.
 	pub fn update_channel_config(
-		&self, user_channel_id: &UserChannelId, counterparty_node_id: PublicKey,
+		&self, user_channel_id: &UserChannelId, counterparty_node_id: BindingPublicKey,
 		channel_config: ChannelConfig,
 	) -> Result<(), Error> {
+		let counterparty_node_id = *maybe_deref(&counterparty_node_id);
 		let open_channels: Vec<LdkChannelDetails> =
 			self.channel_manager.list_channels_with_counterparty(&counterparty_node_id);
 		if let Some(channel_details) =
@@ -2284,18 +2306,20 @@ impl Node {
 
 			let is_persisted = stored_peer.is_some();
 			let is_connected = true;
-			let details = PeerDetails { node_id, address, is_persisted, is_connected };
+			let details =
+				PeerDetails { node_id: maybe_wrap(node_id), address, is_persisted, is_connected };
 			peers.push(details);
 		}
 
 		// Now add all known-but-offline peers, too.
 		for p in self.peer_store.list_peers() {
-			if peers.iter().take(connected_peers_len).any(|d| d.node_id == p.node_id) {
+			if peers.iter().take(connected_peers_len).any(|d| maybe_deref(&d.node_id) == &p.node_id)
+			{
 				continue;
 			}
 
 			let details = PeerDetails {
-				node_id: p.node_id,
+				node_id: maybe_wrap(p.node_id),
 				address: p.address,
 				is_persisted: true,
 				is_connected: false,
@@ -2331,8 +2355,8 @@ impl Node {
 
 	/// Verifies that the given ECDSA signature was created for the given message with the
 	/// secret key corresponding to the given public key.
-	pub fn verify_signature(&self, msg: &[u8], sig: &str, pkey: &PublicKey) -> bool {
-		self.keys_manager.verify_signature(msg, sig, pkey)
+	pub fn verify_signature(&self, msg: &[u8], sig: &str, pkey: &BindingPublicKey) -> bool {
+		self.keys_manager.verify_signature(msg, sig, maybe_deref(pkey))
 	}
 
 	/// Exports the current state of the scorer. The result can be shared with and merged by light nodes that only have
@@ -2517,7 +2541,8 @@ pub(crate) fn total_anchor_channels_reserve_sats(
 			!config
 				.anchor_channels_config
 				.trusted_peers_no_reserve
-				.contains(&c.counterparty.node_id)
+				.iter()
+				.any(|node_id| maybe_deref(node_id) == &c.counterparty.node_id)
 				&& c.channel_shutdown_state
 					.map_or(true, |s| s != ChannelShutdownState::ShutdownComplete)
 				&& c.channel_type.as_ref().map_or(false, requires_anchor_channel_type)
@@ -2527,13 +2552,18 @@ pub(crate) fn total_anchor_channels_reserve_sats(
 }
 
 pub(crate) fn new_channel_anchor_reserve_sats(
-	config: &Config, peer_node_id: &PublicKey, anchor_channel: bool,
+	config: &Config, peer_node_id: &Secp256k1PublicKey, anchor_channel: bool,
 ) -> u64 {
 	if !anchor_channel {
 		return 0;
 	}
 
-	if config.anchor_channels_config.trusted_peers_no_reserve.contains(peer_node_id) {
+	if config
+		.anchor_channels_config
+		.trusted_peers_no_reserve
+		.iter()
+		.any(|node_id| maybe_deref(node_id) == peer_node_id)
+	{
 		0
 	} else {
 		config.anchor_channels_config.per_channel_reserve_sats
@@ -2542,7 +2572,7 @@ pub(crate) fn new_channel_anchor_reserve_sats(
 
 async fn connect_and_discover_lsp(
 	connection_manager: &ConnectionManager<Arc<Logger>>,
-	liquidity_source: &LiquiditySource<Arc<Logger>>, logger: &Logger, node_id: PublicKey,
+	liquidity_source: &LiquiditySource<Arc<Logger>>, logger: &Logger, node_id: Secp256k1PublicKey,
 	address: SocketAddress,
 ) {
 	if let Err(e) = connection_manager.connect_peer_if_necessary(node_id, address).await {

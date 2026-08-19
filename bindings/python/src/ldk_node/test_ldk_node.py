@@ -250,6 +250,27 @@ class TestMnemonic(unittest.TestCase):
         self.assertIsInstance(error.exception, NodeError.InvalidMnemonic)
 
 
+class TestPublicKey(unittest.TestCase):
+    def test_public_key_object(self):
+        self.assertTrue(
+            hasattr(bindings.PublicKey, "from_str"),
+            "PublicKey should be exposed as an object",
+        )
+
+        public_key_str = (
+            "02eec7245d6b7d2ccb30380bfbe2a3648cd7a942653f5aa340edcea1f283686619"
+        )
+        public_key = bindings.PublicKey.from_str(public_key_str)
+
+        self.assertIsInstance(public_key, bindings.PublicKey)
+        self.assertEqual(str(public_key), public_key_str)
+
+        with self.assertRaises(NodeError) as error:
+            bindings.PublicKey.from_str("invalid")
+
+        self.assertIsInstance(error.exception, NodeError.InvalidPublicKey)
+
+
 class TestLdkNode(unittest.TestCase):
     def setUp(self):
         bitcoin_cli("createwallet ldk_node_test")

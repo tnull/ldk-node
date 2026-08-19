@@ -26,7 +26,7 @@ use crate::liquidity::{
 };
 use crate::logger::{log_error, log_info, LdkLogger, Logger};
 use crate::runtime::Runtime;
-use crate::types::{LiquidityManager, Wallet};
+use crate::types::{LiquidityManager, PublicKey as BindingPublicKey, Wallet};
 use crate::Error;
 
 pub(crate) struct LSPS1Client<L: Deref>
@@ -298,7 +298,7 @@ where
 							order_params: order,
 							payment_options: payment.into(),
 							channel_state: channel,
-							counterparty_node_id,
+							counterparty_node_id: crate::ffi::maybe_wrap(counterparty_node_id),
 						};
 
 						match request.sender.send(response) {
@@ -347,7 +347,7 @@ where
 							order_params: order,
 							payment_options: payment.into(),
 							channel_state: channel,
-							counterparty_node_id,
+							counterparty_node_id: crate::ffi::maybe_wrap(counterparty_node_id),
 						};
 
 						match request.sender.send(response) {
@@ -422,7 +422,7 @@ pub struct LSPS1OrderStatus {
 	/// Contains information about the channel state.
 	pub channel_state: Option<LSPS1ChannelInfo>,
 	/// The node id of the LSP.
-	pub counterparty_node_id: PublicKey,
+	pub counterparty_node_id: BindingPublicKey,
 }
 
 #[cfg(not(feature = "uniffi"))]
@@ -473,11 +473,11 @@ impl LSPS1Liquidity {
 	/// via [`crate::Builder::add_liquidity_source`] or [`crate::Liquidity::add_liquidity_source`] is used.
 	pub fn request_channel(
 		&self, lsp_balance_sat: u64, client_balance_sat: u64, channel_expiry_blocks: u32,
-		announce_channel: bool, node_id: Option<PublicKey>,
+		announce_channel: bool, node_id: Option<BindingPublicKey>,
 	) -> Result<LSPS1OrderStatus, Error> {
-		let lsps1_node = self
-			.runtime
-			.block_on(async { self.liquidity_source.get_lsps1_node(node_id.as_ref()).await })?;
+		let node_id = node_id.as_ref().map(crate::ffi::maybe_deref);
+		let lsps1_node =
+			self.runtime.block_on(async { self.liquidity_source.get_lsps1_node(node_id).await })?;
 
 		let con_node_id = lsps1_node.node_id;
 		let con_addr = lsps1_node.address.clone();
@@ -512,8 +512,9 @@ impl LSPS1Liquidity {
 
 	/// Connects to the configured LSP and checks for the status of a previously-placed order with the given node ID.
 	pub fn check_order_status(
-		&self, order_id: LSPS1OrderId, lsp_node_id: PublicKey,
+		&self, order_id: LSPS1OrderId, lsp_node_id: BindingPublicKey,
 	) -> Result<LSPS1OrderStatus, Error> {
+		let lsp_node_id = *crate::ffi::maybe_deref(&lsp_node_id);
 		let lsps1_node = self
 			.runtime
 			.block_on(async { self.liquidity_source.get_lsps1_node(Some(&lsp_node_id)).await })?;

@@ -387,8 +387,7 @@ typedef string BlockHash;
 [Custom]
 typedef string SocketAddress;
 
-[Custom]
-typedef string PublicKey;
+typedef interface PublicKey;
 
 [Custom]
 typedef string NodeId;
