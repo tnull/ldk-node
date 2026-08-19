@@ -309,6 +309,38 @@ class TestNodeAlias(unittest.TestCase):
         self.assertIsInstance(error.exception, NodeError.InvalidNodeAlias)
 
 
+class TestNodeId(unittest.TestCase):
+    def test_node_id_object(self):
+        self.assertTrue(
+            hasattr(bindings.NodeId, "from_str"),
+            "NodeId should be exposed as an object",
+        )
+
+        node_id_str = (
+            "02eec7245d6b7d2ccb30380bfbe2a3648cd7a942653f5aa340edcea1f283686619"
+        )
+        node_id = bindings.NodeId.from_str(node_id_str)
+
+        self.assertIsInstance(node_id, bindings.NodeId)
+        self.assertEqual(str(node_id), node_id_str)
+        self.assertEqual(node_id.as_bytes(), bytes.fromhex(node_id_str))
+
+        public_key = bindings.PublicKey.from_str(node_id_str)
+        self.assertEqual(bindings.NodeId.from_public_key(public_key), node_id)
+        self.assertEqual(node_id.as_public_key(), public_key)
+
+        with self.assertRaises(NodeError) as error:
+            bindings.NodeId.from_str("invalid")
+
+        self.assertIsInstance(error.exception, NodeError.InvalidNodeId)
+
+        invalid_public_key_node_id = bindings.NodeId.from_str("00" * 33)
+        with self.assertRaises(NodeError) as error:
+            invalid_public_key_node_id.as_public_key()
+
+        self.assertIsInstance(error.exception, NodeError.InvalidNodeId)
+
+
 class TestLdkNode(unittest.TestCase):
     def setUp(self):
         bitcoin_cli("createwallet ldk_node_test")

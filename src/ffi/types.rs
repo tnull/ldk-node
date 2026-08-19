@@ -38,8 +38,8 @@ use lightning::offers::payer_proof::{
 use lightning::offers::refund::Refund as LdkRefund;
 use lightning::offers::static_invoice::StaticInvoice as LdkStaticInvoice;
 use lightning::onion_message::dns_resolution::HumanReadableName as LdkHumanReadableName;
-use lightning::routing::gossip::NodeAlias as LdkNodeAlias;
-pub use lightning::routing::gossip::{NodeId, RoutingFees};
+pub use lightning::routing::gossip::RoutingFees;
+use lightning::routing::gossip::{NodeAlias as LdkNodeAlias, NodeId as LdkNodeId};
 pub use lightning::routing::router::RouteParametersConfig;
 use lightning::util::persist::PageToken as LdkPageToken;
 use lightning::util::ser::{Readable, RequiredWrapper, Writeable, Writer};
@@ -242,19 +242,71 @@ impl ReadablePublicKey for RequiredWrapper<Arc<PublicKey>> {
 	}
 }
 
-uniffi::custom_type!(NodeId, String, {
-	remote,
-	try_lift: |val| {
-		if let Ok(key) = NodeId::from_str(&val) {
-			return Ok(key);
-		}
+/// A compressed public key identifying a node in the network graph.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Object)]
+#[uniffi::export(Debug, Display, Eq)]
+pub struct NodeId {
+	pub(crate) inner: LdkNodeId,
+}
 
-		Err(Error::InvalidNodeId.into())
-	},
-	lower: |obj| {
-		obj.to_string()
-	},
-});
+#[uniffi::export]
+impl NodeId {
+	/// Constructs a node id from its serialized representation.
+	#[uniffi::constructor]
+	pub fn from_str(node_id_str: &str) -> Result<Self, Error> {
+		node_id_str.parse()
+	}
+
+	/// Constructs a node id from a public key.
+	#[uniffi::constructor]
+	pub fn from_public_key(public_key: Arc<PublicKey>) -> Self {
+		LdkNodeId::from_pubkey(public_key.as_ref().as_ref()).into()
+	}
+
+	/// Returns the serialized node id.
+	pub fn as_bytes(&self) -> Vec<u8> {
+		self.inner.as_slice().to_vec()
+	}
+
+	/// Returns the node id as a public key.
+	pub fn as_public_key(&self) -> Result<Arc<PublicKey>, Error> {
+		self.inner.as_pubkey().map(PublicKey::from).map(Arc::new).map_err(|_| Error::InvalidNodeId)
+	}
+}
+
+impl FromStr for NodeId {
+	type Err = Error;
+
+	fn from_str(node_id_str: &str) -> Result<Self, Self::Err> {
+		node_id_str.parse::<LdkNodeId>().map(Self::from).map_err(|_| Error::InvalidNodeId)
+	}
+}
+
+impl From<LdkNodeId> for NodeId {
+	fn from(inner: LdkNodeId) -> Self {
+		Self { inner }
+	}
+}
+
+impl Deref for NodeId {
+	type Target = LdkNodeId;
+
+	fn deref(&self) -> &Self::Target {
+		&self.inner
+	}
+}
+
+impl AsRef<LdkNodeId> for NodeId {
+	fn as_ref(&self) -> &LdkNodeId {
+		self.deref()
+	}
+}
+
+impl std::fmt::Display for NodeId {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		write!(f, "{}", self.inner)
+	}
+}
 
 uniffi::custom_type!(Address, String, {
 	remote,

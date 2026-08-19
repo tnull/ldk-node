@@ -22,6 +22,10 @@ pub(crate) type SocketAddress = Arc<crate::ffi::SocketAddress>;
 pub(crate) use lightning::routing::gossip::NodeAlias;
 #[cfg(feature = "uniffi")]
 pub(crate) type NodeAlias = Arc<crate::ffi::NodeAlias>;
+#[cfg(not(feature = "uniffi"))]
+pub(crate) use lightning::routing::gossip::NodeId;
+#[cfg(feature = "uniffi")]
+pub(crate) type NodeId = Arc<crate::ffi::NodeId>;
 use bitcoin::{OutPoint, ScriptBuf};
 use bitcoin_payment_instructions::amount::Amount as BPIAmount;
 use bitcoin_payment_instructions::dns_resolver::DNSHrnResolver;

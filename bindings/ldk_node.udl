@@ -388,8 +388,7 @@ typedef interface SocketAddress;
 
 typedef interface PublicKey;
 
-[Custom]
-typedef string NodeId;
+typedef interface NodeId;
 
 [Custom]
 typedef string Address;

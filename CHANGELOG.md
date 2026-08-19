@@ -14,6 +14,9 @@
 - The language bindings now expose `NodeAlias` as an object instead of a string alias. Node aliases
   must be passed through its fallible constructor, which returns `NodeError::InvalidNodeAlias` for
   invalid input.
+- The language bindings now expose `NodeId` as an object instead of a string alias. Node ids must
+  be passed through its fallible constructor, which returns `NodeError::InvalidNodeId` for invalid
+  input.
 - `generate_entropy_mnemonic` has been removed. Use `bip39::Mnemonic::generate` in Rust and
   `Mnemonic::generate` in the language bindings instead.
 - Migrating between storage backends does not preserve the relative creation order of

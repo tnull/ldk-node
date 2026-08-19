@@ -9,15 +9,15 @@
 
 use std::sync::Arc;
 
-use lightning::routing::gossip::NodeId;
 #[cfg(feature = "uniffi")]
 use lightning::routing::gossip::RoutingFees;
 #[cfg(not(feature = "uniffi"))]
 use lightning::routing::gossip::{ChannelInfo, NodeInfo};
 
-use crate::types::Graph;
+use crate::ffi::{maybe_deref, maybe_wrap};
 #[cfg(feature = "uniffi")]
 use crate::types::SocketAddress;
+use crate::types::{Graph, NodeId};
 
 /// Represents the network as nodes and channels between them.
 #[cfg_attr(feature = "uniffi", derive(uniffi::Object))]
@@ -45,12 +45,12 @@ impl NetworkGraph {
 
 	/// Returns the list of nodes in the graph
 	pub fn list_nodes(&self) -> Vec<NodeId> {
-		self.inner.read_only().nodes().unordered_keys().map(|n| *n).collect()
+		self.inner.read_only().nodes().unordered_keys().map(|n| maybe_wrap(*n)).collect()
 	}
 
 	/// Returns information on a node with the given id.
 	pub fn node(&self, node_id: &NodeId) -> Option<NodeInfo> {
-		self.inner.read_only().nodes().get(node_id).cloned().map(|n| n.into())
+		self.inner.read_only().nodes().get(maybe_deref(node_id)).cloned().map(|n| n.into())
 	}
 }
 
@@ -78,9 +78,9 @@ pub struct ChannelInfo {
 impl From<lightning::routing::gossip::ChannelInfo> for ChannelInfo {
 	fn from(value: lightning::routing::gossip::ChannelInfo) -> Self {
 		Self {
-			node_one: value.node_one,
+			node_one: maybe_wrap(value.node_one),
 			one_to_two: value.one_to_two.map(|u| u.into()),
-			node_two: value.node_two,
+			node_two: maybe_wrap(value.node_two),
 			two_to_one: value.two_to_one.map(|u| u.into()),
 			capacity_sats: value.capacity_sats,
 		}
