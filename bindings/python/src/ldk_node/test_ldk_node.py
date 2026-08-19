@@ -290,6 +290,25 @@ class TestSocketAddress(unittest.TestCase):
         self.assertIsInstance(error.exception, NodeError.InvalidSocketAddress)
 
 
+class TestNodeAlias(unittest.TestCase):
+    def test_node_alias_object(self):
+        self.assertTrue(
+            hasattr(bindings.NodeAlias, "from_str"),
+            "NodeAlias should be exposed as an object",
+        )
+
+        node_alias_str = "LDK Node"
+        node_alias = bindings.NodeAlias.from_str(node_alias_str)
+
+        self.assertIsInstance(node_alias, bindings.NodeAlias)
+        self.assertEqual(str(node_alias), node_alias_str)
+
+        with self.assertRaises(NodeError) as error:
+            bindings.NodeAlias.from_str("This alias is longer than thirty-two bytes")
+
+        self.assertIsInstance(error.exception, NodeError.InvalidNodeAlias)
+
+
 class TestLdkNode(unittest.TestCase):
     def setUp(self):
         bitcoin_cli("createwallet ldk_node_test")

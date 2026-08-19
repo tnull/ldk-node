@@ -14,14 +14,13 @@ use std::time::Duration;
 
 use bitcoin::Network;
 use lightning::ln::msgs::SocketAddress as LdkSocketAddress;
-use lightning::routing::gossip::NodeAlias;
 use lightning::routing::router::RouteParametersConfig;
 use lightning::util::config::{
 	ChannelConfig as LdkChannelConfig, MaxDustHTLCExposure as LdkMaxDustHTLCExposure, UserConfig,
 };
 
 use crate::logger::LogLevel;
-use crate::types::{PublicKey, SocketAddress};
+use crate::types::{NodeAlias, PublicKey, SocketAddress};
 
 // Config defaults
 const DEFAULT_NETWORK: Network = Network::Bitcoin;
@@ -830,10 +829,12 @@ pub enum AsyncPaymentsRole {
 mod tests {
 	use std::str::FromStr;
 
+	use lightning::routing::gossip::NodeAlias as LdkNodeAlias;
+
 	use super::{
 		clamp_full_scan_stop_gap, may_announce_channel, AnnounceError, Config, ElectrumSyncConfig,
-		EsploraSyncConfig, LdkSocketAddress, NodeAlias, DEFAULT_FULL_SCAN_STOP_GAP,
-		MAX_FULL_SCAN_STOP_GAP, MIN_FULL_SCAN_STOP_GAP,
+		EsploraSyncConfig, LdkSocketAddress, DEFAULT_FULL_SCAN_STOP_GAP, MAX_FULL_SCAN_STOP_GAP,
+		MIN_FULL_SCAN_STOP_GAP,
 	};
 
 	#[test]
@@ -849,7 +850,7 @@ mod tests {
 		let alias_frm_str = |alias: &str| {
 			let mut bytes = [0u8; 32];
 			bytes[..alias.as_bytes().len()].copy_from_slice(alias.as_bytes());
-			NodeAlias(bytes)
+			crate::ffi::maybe_wrap(LdkNodeAlias(bytes))
 		};
 		node_config.node_alias = Some(alias_frm_str("LDK_Node"));
 		assert_eq!(

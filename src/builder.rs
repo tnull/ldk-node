@@ -28,7 +28,7 @@ use lightning::ln::msgs::{RoutingMessageHandler, SocketAddress};
 use lightning::ln::peer_handler::{IgnoringMessageHandler, MessageHandler};
 use lightning::log_trace;
 use lightning::onion_message::dns_resolution::DNSResolverMessageHandler;
-use lightning::routing::gossip::NodeAlias;
+use lightning::routing::gossip::NodeAlias as LdkNodeAlias;
 use lightning::routing::router::DefaultRouter;
 use lightning::routing::scoring::{
 	CombinedScorer, ProbabilisticScorer, ProbabilisticScoringDecayParameters,
@@ -624,7 +624,7 @@ impl NodeBuilder {
 	pub fn set_node_alias(&mut self, node_alias: String) -> Result<&mut Self, BuildError> {
 		let node_alias = sanitize_alias(&node_alias)?;
 
-		self.config.node_alias = Some(node_alias);
+		self.config.node_alias = Some(crate::ffi::maybe_wrap(node_alias));
 		Ok(self)
 	}
 
@@ -2472,7 +2472,7 @@ fn derive_xprv(
 }
 
 /// Sanitize the user-provided node alias to ensure that it is a valid protocol-specified UTF-8 string.
-pub(crate) fn sanitize_alias(alias_str: &str) -> Result<NodeAlias, BuildError> {
+pub(crate) fn sanitize_alias(alias_str: &str) -> Result<LdkNodeAlias, BuildError> {
 	let alias = alias_str.trim();
 
 	// Alias must be 32-bytes long or less.
@@ -2482,7 +2482,7 @@ pub(crate) fn sanitize_alias(alias_str: &str) -> Result<NodeAlias, BuildError> {
 
 	let mut bytes = [0u8; 32];
 	bytes[..alias.as_bytes().len()].copy_from_slice(alias.as_bytes());
-	Ok(NodeAlias(bytes))
+	Ok(LdkNodeAlias(bytes))
 }
 
 #[cfg(test)]
@@ -2497,7 +2497,7 @@ mod tests {
 		CHANNEL_MANAGER_PERSISTENCE_SECONDARY_NAMESPACE,
 	};
 
-	use super::{sanitize_alias, BuildError, NodeAlias, NodeBuilder};
+	use super::{sanitize_alias, BuildError, LdkNodeAlias, NodeBuilder};
 	use crate::entropy::NodeEntropy;
 	use crate::io::test_utils::InMemoryStore;
 	use crate::logger::Logger;
@@ -2579,7 +2579,7 @@ mod tests {
 		let mut buf = [0u8; 32];
 		buf[..alias.as_bytes().len()].copy_from_slice(alias.as_bytes());
 
-		let expected_node_alias = NodeAlias([0; 32]);
+		let expected_node_alias = LdkNodeAlias([0; 32]);
 		let node_alias = sanitize_alias(alias).unwrap();
 		assert_eq!(node_alias, expected_node_alias);
 	}
@@ -2590,7 +2590,7 @@ mod tests {
 		let alias = "I\u{1F496}LDK-Node!";
 		let mut buf = [0u8; 32];
 		buf[..alias.as_bytes().len()].copy_from_slice(alias.as_bytes());
-		let expected_alias = NodeAlias(buf);
+		let expected_alias = LdkNodeAlias(buf);
 
 		let user_provided_alias = "I\u{1F496}LDK-Node!\0\u{26A1}";
 		let node_alias = sanitize_alias(user_provided_alias).unwrap();

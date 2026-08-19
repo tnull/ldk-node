@@ -38,7 +38,8 @@ use lightning::offers::payer_proof::{
 use lightning::offers::refund::Refund as LdkRefund;
 use lightning::offers::static_invoice::StaticInvoice as LdkStaticInvoice;
 use lightning::onion_message::dns_resolution::HumanReadableName as LdkHumanReadableName;
-pub use lightning::routing::gossip::{NodeAlias, NodeId, RoutingFees};
+use lightning::routing::gossip::NodeAlias as LdkNodeAlias;
+pub use lightning::routing::gossip::{NodeId, RoutingFees};
 pub use lightning::routing::router::RouteParametersConfig;
 use lightning::util::persist::PageToken as LdkPageToken;
 use lightning::util::ser::{Readable, RequiredWrapper, Writeable, Writer};
@@ -1382,15 +1383,47 @@ uniffi::custom_type!(UntrustedString, String, {
 	},
 });
 
-uniffi::custom_type!(NodeAlias, String, {
-	remote,
-	try_lift: |val| {
-		Ok(sanitize_alias(&val).map_err(|_| Error::InvalidNodeAlias)?)
-	},
-	lower: |obj| {
-		obj.to_string()
-	},
-});
+/// A user-defined name for a node.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Object)]
+#[uniffi::export(Debug, Display, Eq)]
+pub struct NodeAlias {
+	pub(crate) inner: LdkNodeAlias,
+}
+
+#[uniffi::export]
+impl NodeAlias {
+	/// Constructs a node alias from a string.
+	#[uniffi::constructor]
+	pub fn from_str(node_alias_str: &str) -> Result<Self, Error> {
+		sanitize_alias(node_alias_str).map(Self::from).map_err(|_| Error::InvalidNodeAlias)
+	}
+}
+
+impl From<LdkNodeAlias> for NodeAlias {
+	fn from(inner: LdkNodeAlias) -> Self {
+		Self { inner }
+	}
+}
+
+impl Deref for NodeAlias {
+	type Target = LdkNodeAlias;
+
+	fn deref(&self) -> &Self::Target {
+		&self.inner
+	}
+}
+
+impl AsRef<LdkNodeAlias> for NodeAlias {
+	fn as_ref(&self) -> &LdkNodeAlias {
+		self.deref()
+	}
+}
+
+impl std::fmt::Display for NodeAlias {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		write!(f, "{}", self.inner)
+	}
+}
 
 /// Represents the description of an invoice which has to be either a directly included string or
 /// a hash of a description provided out of band.

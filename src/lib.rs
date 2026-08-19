@@ -156,7 +156,6 @@ pub use lightning::ln::channel_state::ChannelShutdownState;
 use lightning::ln::channelmanager::PaymentId;
 use lightning::ln::msgs::{BaseMessageHandler, SocketAddress as LdkSocketAddress};
 use lightning::ln::peer_handler::CustomMessageHandler;
-use lightning::routing::gossip::NodeAlias;
 use lightning::sign::EntropySource;
 use lightning::util::persist::KVStore;
 use lightning::util::wallet_utils::{Input, Wallet as LdkWallet};
@@ -184,9 +183,9 @@ use runtime::Runtime;
 pub use tokio;
 use types::{
 	Broadcaster, BumpTransactionEventHandler, ChainMonitor, ChannelManager, DynStore, Graph,
-	HRNResolver, KeysManager, OnionMessenger, PaymentStore, PeerManager,
-	PublicKey as BindingPublicKey, Router, Scorer, SocketAddress as BindingSocketAddress, Sweeper,
-	Wallet,
+	HRNResolver, KeysManager, NodeAlias as BindingNodeAlias, OnionMessenger, PaymentStore,
+	PeerManager, PublicKey as BindingPublicKey, Router, Scorer,
+	SocketAddress as BindingSocketAddress, Sweeper, Wallet,
 };
 pub use types::{
 	ChannelCounterparty, ChannelDetails, CustomTlvRecord, PeerDetails, ReserveType, UserChannelId,
@@ -624,7 +623,11 @@ impl Node {
 								.collect();
 
 							if let Some(node_alias) = node_alias.as_ref() {
-								bcast_pm.broadcast_node_announcement([0; 3], node_alias.0, addresses);
+								bcast_pm.broadcast_node_announcement(
+									[0; 3],
+									maybe_deref(node_alias).0,
+									addresses,
+								);
 
 								let unix_time_secs_opt =
 									SystemTime::now().duration_since(UNIX_EPOCH).ok().map(|d| d.as_secs());
@@ -1025,8 +1028,8 @@ impl Node {
 	}
 
 	/// Returns our node alias.
-	pub fn node_alias(&self) -> Option<NodeAlias> {
-		self.config.node_alias
+	pub fn node_alias(&self) -> Option<BindingNodeAlias> {
+		self.config.node_alias.clone()
 	}
 
 	/// Returns a payment handler allowing to create and pay [BOLT 11] invoices.

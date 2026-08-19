@@ -420,8 +420,7 @@ typedef interface Mnemonic;
 [Custom]
 typedef string UntrustedString;
 
-[Custom]
-typedef string NodeAlias;
+typedef interface NodeAlias;
 
 [Custom]
 typedef string LSPS1OrderId;
