@@ -3482,12 +3482,12 @@ async fn unified_receive_rejects_msat_overflow() {
 	);
 }
 
-/// A [`KVStore`] that fails every `write` to the payments namespace once `fail_writes` is set,
-/// while keeping everything else operational. Used to arm a `PersistenceFailed` regression case
-/// on top of an otherwise-normal node, without needing a dedicated node/channel fixture.
+/// A [`KVStore`] that fails the next `write` to the payments namespace once `fail_next_write` is
+/// set, while keeping everything else operational. Used to arm a `PersistenceFailed` regression
+/// case on top of an otherwise-normal node, without needing a dedicated node/channel fixture.
 struct PaymentFailingStore {
 	inner: Arc<InMemoryStore>,
-	fail_writes: Arc<AtomicBool>,
+	fail_next_write: Arc<AtomicBool>,
 }
 
 impl KVStore for PaymentFailingStore {
@@ -3501,14 +3501,14 @@ impl KVStore for PaymentFailingStore {
 		&self, primary_namespace: &str, secondary_namespace: &str, key: &str, buf: Vec<u8>,
 	) -> impl Future<Output = Result<(), lightning::io::Error>> + 'static + Send {
 		let inner = Arc::clone(&self.inner);
-		let fail_writes = Arc::clone(&self.fail_writes);
+		let fail_next_write = Arc::clone(&self.fail_next_write);
 		let primary_namespace = primary_namespace.to_string();
 		let secondary_namespace = secondary_namespace.to_string();
 		let key = key.to_string();
 		async move {
-			// Only fail payment-store writes. Failing every write (e.g. channel monitor
-			// updates) would crash the background processor, defeating the test.
-			if fail_writes.load(Ordering::Acquire) && primary_namespace == "payments" {
+			// Only fail the next payment-store write. Failing unrelated writes (e.g. channel
+			// monitor updates) would crash the background processor, defeating the test.
+			if primary_namespace == "payments" && fail_next_write.swap(false, Ordering::AcqRel) {
 				return Err(lightning::io::Error::new(
 					lightning::io::ErrorKind::Other,
 					"injected payment persistence failure",
@@ -3545,18 +3545,19 @@ impl PaginatedKVStore for PaymentFailingStore {
 	}
 }
 
-/// Builds `node_a` on a [`PaymentFailingStore`] the caller can arm later via `fail_writes`, and
+/// Builds `node_a` on a [`PaymentFailingStore`] the caller can arm later via `fail_next_write`, and
 /// `node_b` on the default store — otherwise identical to `setup_two_nodes`. Lets a single test
 /// flow cover the `PersistenceFailed` fallback hazard on top of the fixture it already needs for
 /// the normal unified-payment paths, instead of duplicating that fixture in a standalone test.
 fn setup_two_nodes_with_failing_store_a(
-	chain_source: &TestChainSource, fail_writes: Arc<AtomicBool>,
+	chain_source: &TestChainSource, fail_next_write: Arc<AtomicBool>,
 ) -> (TestNode, TestNode) {
 	let config_a = random_config();
 	setup_builder!(builder_a, config_a.node_config);
 	configure_chain_source(chain_source, &mut builder_a, &config_a);
 	builder_a.set_async_payments_role(config_a.async_payments_role).unwrap();
-	let failing_store = PaymentFailingStore { inner: Arc::new(InMemoryStore::new()), fail_writes };
+	let failing_store =
+		PaymentFailingStore { inner: Arc::new(InMemoryStore::new()), fail_next_write };
 	let node_a = builder_a.build_with_store(config_a.node_entropy.into(), failing_store).unwrap();
 	node_a.start().unwrap();
 
@@ -3572,9 +3573,9 @@ async fn unified_send_receive_bip21_uri() {
 	let (bitcoind, electrsd) = setup_bitcoind_and_electrsd();
 	let chain_source = random_chain_source(&bitcoind, &electrsd);
 
-	let fail_writes = Arc::new(AtomicBool::new(false));
+	let fail_next_write = Arc::new(AtomicBool::new(false));
 	let (node_a, node_b) =
-		setup_two_nodes_with_failing_store_a(&chain_source, Arc::clone(&fail_writes));
+		setup_two_nodes_with_failing_store_a(&chain_source, Arc::clone(&fail_next_write));
 
 	let address_a = node_a.onchain_payment().new_address().unwrap();
 	let premined_sats = 5_000_000;
@@ -3700,7 +3701,7 @@ async fn unified_send_receive_bip21_uri() {
 	// after the Lightning payment has already been initiated with the ChannelManager — must also
 	// abort rather than fall back to on-chain. Arm node_a's store and send a fresh BOLT11-only
 	// URI to isolate the BOLT11 leg from the BOLT12/on-chain legs already exercised above.
-	fail_writes.store(true, Ordering::Release);
+	fail_next_write.store(true, Ordering::Release);
 
 	let fresh_amount_sats = 50_000;
 	let fresh_uri = node_b.unified_payment().receive(fresh_amount_sats, "asdf", 4_000).unwrap();
@@ -3725,6 +3726,27 @@ async fn unified_send_receive_bip21_uri() {
 		!onchain_payments,
 		"An on-chain payment for the fresh amount was broadcast despite PersistenceFailed"
 	);
+
+	// Regression test for https://github.com/lightningdevkit/ldk-node/issues/1060: a payment-store
+	// persistence failure on the BOLT12 leg must be terminal. Since the store only fails the next
+	// payment write, falling through would make the BOLT11 leg succeed and double-pay the recipient.
+	fail_next_write.store(true, Ordering::Release);
+
+	let fresh_bolt12_uri = node_b.unified_payment().receive(60_000, "asdf", 4_000).unwrap();
+	let persistence_result = node_a.unified_payment().send(&fresh_bolt12_uri, None, None).await;
+	match persistence_result {
+		Err(NodeError::PersistenceFailed) => {},
+		Ok(UnifiedPaymentResult::Bolt11 { payment_id }) => {
+			panic!(
+				"Regression: BOLT12 PersistenceFailed fell back to BOLT11. payment_id={:?}",
+				payment_id
+			);
+		},
+		Ok(UnifiedPaymentResult::Onchain { txid }) => {
+			panic!("Regression: BOLT12 PersistenceFailed fell back to on-chain. txid={}", txid);
+		},
+		other => panic!("Expected BOLT12 PersistenceFailed error, got: {:?}", other),
+	}
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]

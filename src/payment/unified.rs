@@ -38,6 +38,10 @@ use crate::Config;
 
 type Uri<'a> = bip21::Uri<'a, NetworkChecked, Extras>;
 
+fn bolt12_error_prevents_fallback(error: &Error) -> bool {
+	matches!(error, Error::DuplicatePayment | Error::PersistenceFailed)
+}
+
 #[cfg(not(feature = "uniffi"))]
 type HumanReadableName = lightning::onion_message::dns_resolution::HumanReadableName;
 #[cfg(feature = "uniffi")]
@@ -309,14 +313,19 @@ impl UnifiedPayment {
 						)
 					} else {
 						self.bolt12_payment.send(&offer, None, None, route_parameters)
-					}
-					.map_err(|e| {
-						log_error!(self.logger, "Failed to send BOLT12 offer: {:?}. This is part of a unified payment. Falling back to the BOLT11 invoice.", e);
-						e
-					});
+					};
 
-					if let Ok(payment_id) = payment_result {
-						return Ok(UnifiedPaymentResult::Bolt12 { payment_id });
+					match payment_result {
+						Ok(payment_id) => {
+							return Ok(UnifiedPaymentResult::Bolt12 { payment_id });
+						},
+						Err(e) if bolt12_error_prevents_fallback(&e) => {
+							log_error!(self.logger, "Failed to send BOLT12 offer: {:?}. This is part of a unified payment. Aborting to avoid a duplicate payment.", e);
+							return Err(e);
+						},
+						Err(e) => {
+							log_error!(self.logger, "Failed to send BOLT12 offer: {:?}. This is part of a unified payment. Falling back to the BOLT11 invoice.", e);
+						},
 					}
 				},
 				PaymentMethod::LightningBolt11(invoice) => {
@@ -523,7 +532,25 @@ mod tests {
 	use bitcoin::address::NetworkUnchecked;
 	use bitcoin::{Address, Network};
 
-	use super::{maybe_wrap, Amount, Bolt11Invoice, Extras, LdkOffer};
+	use super::{
+		bolt12_error_prevents_fallback, maybe_wrap, Amount, Bolt11Invoice, Error, Extras, LdkOffer,
+	};
+
+	#[test]
+	fn bolt12_terminal_errors_prevent_fallback() {
+		assert!(
+			bolt12_error_prevents_fallback(&Error::DuplicatePayment),
+			"a duplicate BOLT12 payment must not fall back to another payment method"
+		);
+		assert!(
+			bolt12_error_prevents_fallback(&Error::PersistenceFailed),
+			"a potentially initiated BOLT12 payment must not fall back after persistence fails"
+		);
+		assert!(
+			!bolt12_error_prevents_fallback(&Error::PaymentSendingFailed),
+			"safe BOLT12 failures should still fall back to another payment method"
+		);
+	}
 
 	#[test]
 	fn parse_uri() {
